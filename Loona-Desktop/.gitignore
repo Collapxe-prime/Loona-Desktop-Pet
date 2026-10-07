@@ -43,6 +43,7 @@ Desktop.ini
 # Only runtime assets belong to the application repository.
 /assets/*
 !/assets/Loona.png
+!/assets/app-icon.ico
 !/assets/revamp/
 !/assets/animations/
 !/assets/petting-smile/

@@ -5,7 +5,7 @@ import hashlib
 import os
 import shutil
 import tempfile
-from build import ROOT,release_assets,inside
+from build import ROOT,release_assets,inside,APP_NAME
 from app_metadata import read_version
 
 DOCUMENTS=('.gitignore','.gitattributes','VERSION','CHANGELOG.md','BUILDING.md',
@@ -13,7 +13,7 @@ DOCUMENTS=('.gitignore','.gitattributes','VERSION','CHANGELOG.md','BUILDING.md',
 MANAGED_DIRECTORIES=('assets','tests','packaging')
 SOURCE_FOLDER='Loona-Desktop'
 RUNTIME_DIRECTORIES=('_internal',SOURCE_FOLDER)
-RUNTIME_FILES={'Loona-Desktop.exe'}
+RUNTIME_FILES={'Loona-Desktop.exe',APP_NAME+'.exe'}
 PROTECTED_ROOT_NAMES={'.git','.github','dist','release','releases','RELEASE-ARTIFACTS.json'}
 PROTECTED_PREFIXES=('social-preview','release','github','publish')
 
@@ -102,7 +102,7 @@ def preserved_snapshot(root,published_layout=False):
 def runtime_files(source):
     """Only deploy the complete, checksum-verified build for the current VERSION."""
     version=read_version(source)
-    package=source/'dist'/f'Loona-Desktop-{version}-windows-x64'
+    package=source/'dist'/f'{APP_NAME}-{version}-windows-x64'
     if not package.is_dir():raise ValueError('Build the current version before syncing executable layout: python build.py')
     if read_version(package)!=version:raise ValueError('Runtime VERSION mismatch')
     listed=set()
@@ -114,7 +114,7 @@ def runtime_files(source):
     actual={p.relative_to(package) for p in tree_files(package)}
     if actual!=listed|{Path('SHA256SUMS.txt')}:
         raise ValueError('Unexpected/missing files in the built runtime package')
-    files={Path('Loona-Desktop.exe'):package/'Loona-Desktop.exe',Path('VERSION'):package/'VERSION'}
+    files={Path(APP_NAME+'.exe'):package/(APP_NAME+'.exe'),Path('VERSION'):package/'VERSION'}
     for folder in ('_internal','assets'):
         for file in tree_files(package/folder):files[file.relative_to(package)]=file
     if not (package/'_internal/python312.dll').is_file():raise ValueError('Embedded runtime missing')

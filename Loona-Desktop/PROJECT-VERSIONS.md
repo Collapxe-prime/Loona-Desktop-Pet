@@ -4,14 +4,14 @@
 
 - `Loona-Desktop` — Dev: работа в PyCharm, окружения, настройки, резервные копии,
   черновики и локальные сборки. Путь оставлен прежним для совместимости с IDE.
-- `Loona-Desktop-Git` — корень Git-репозитория и готовое приложение: `Loona-Desktop.exe`,
+- `Loona-Desktop-Git` — корень Git-репозитория и готовое приложение: `LoonaDesktopPet.exe`,
   `_internal`, `assets`, `VERSION`. Python пользователю не нужен.
 - `Loona-Desktop-Git/Loona-Desktop` — отдельная папка всех исходников, тестов,
   документации, рабочих кадров и скрипта сборки. Из корня репозитория исходники убраны.
 
 ```text
 Loona-Desktop-Git/
-  Loona-Desktop.exe
+  LoonaDesktopPet.exe
   _internal/
   assets/
   VERSION

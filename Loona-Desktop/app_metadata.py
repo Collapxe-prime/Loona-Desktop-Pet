@@ -3,6 +3,10 @@ import os
 from pathlib import Path
 import re
 
+APP_TITLE='Loona Desktop Pet'
+EXE_BASENAME='LoonaDesktopPet'
+APP_ID='LoonaDesktopPet.Desktop'
+
 def read_version(base):
     version=(Path(base)/'VERSION').read_text(encoding='utf-8-sig').strip()
     if not re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?',version):

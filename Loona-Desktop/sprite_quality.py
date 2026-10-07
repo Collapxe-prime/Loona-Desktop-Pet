@@ -1,6 +1,5 @@
 """Calibrate detail bandwidth while preserving sprite alpha and registration."""
 from PIL import Image,ImageFilter
-import numpy as np
 import json
 
 def read_profile(root):
@@ -29,6 +28,8 @@ def sharpness(frame):
     L1 Laplacian / L1 gradient measures edge crispness rather than total detail
     count. It is a comparison metric, not a claim about photographic quality.
     """
+    # Offline calibration only; normal pet playback does not need NumPy in memory.
+    import numpy as np
     a=np.asarray(frame,dtype=np.float64)
     gray=(a[:,:,0]*.2126+a[:,:,1]*.7152+a[:,:,2]*.0722)/255
     opaque=frame.getchannel('A').point(lambda v:255 if v>=250 else 0).filter(ImageFilter.MinFilter(5))

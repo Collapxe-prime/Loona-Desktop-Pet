@@ -2,6 +2,7 @@
 from pathlib import Path
 import json,math
 from PIL import Image,ImageDraw
+from frame_cache import ByteLRU,LazyFrames
 
 def hearts(frame,age):
     overlay=Image.new('RGBA',frame.size)
@@ -27,9 +28,9 @@ class PettingVisuals:
     def __init__(self,root):
         root=Path(root)
         self.meta=json.loads((root/'animation.json').read_text())
-        self.hq=[Image.open(root/'hq'/f'{i:02}.png').convert('RGBA') for i in range(8)]
-        self.normal=[Image.open(root/'frames'/f'{i:02}.png').convert('RGBA') for i in range(8)]
-        if any(f.size!=(384,544) or not f.getbbox() for f in self.hq):raise ValueError('Invalid smile frames')
+        cache=ByteLRU(4*1024**2,lambda frame:frame.width*frame.height*4)
+        self.hq=LazyFrames([root/'hq'/f'{i:02}.png' for i in range(8)],(384,544),cache)
+        self.normal=LazyFrames([root/'frames'/f'{i:02}.png' for i in range(8)],(192,272),cache)
 
     def index(self,age):
         step=max(0,int(age/.2))

@@ -1,4 +1,4 @@
-Loona Desktop для Windows
+Loona Desktop Pet для Windows
 
 Версионирование и сборка:
 VERSION содержит единый номер версии; CHANGELOG.md — историю изменений.

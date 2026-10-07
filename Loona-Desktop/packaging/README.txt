@@ -1,6 +1,6 @@
 Loona Desktop Pet — Windows x64
 
-Распакуйте ZIP целиком и запускайте Loona-Desktop.exe.
+Распакуйте ZIP целиком и запускайте LoonaDesktopPet.exe.
 Не переносите EXE отдельно от _internal, assets и VERSION.
 Установка Python не требуется.
 

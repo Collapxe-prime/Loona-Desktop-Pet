@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from PIL import Image
+from frame_cache import ByteLRU,LazyFrames
 
 
 def read_pack(root, states):
@@ -34,22 +35,13 @@ def read_pack(root, states):
     return data
 
 
-def load_pack(root, data, canvas=(192, 272)):
+def load_pack(root, data, canvas=(192, 272),cache_bytes=4*1024**2):
     result = {}
+    cache=ByteLRU(cache_bytes,lambda frame:frame.width*frame.height*4)
     groups = {name: len(entry["durations_ms"]) for name, entry in data["animations"].items()}
     groups["look"] = 16
     for name, count in groups.items():
-        frames = []
-        for index in range(count):
-            with Image.open(Path(root) / name / f"{index:02}.png") as src:
-                if src.size != canvas or src.mode != "RGBA" or not src.getbbox():
-                    raise ValueError(f"Invalid RGBA sprite: {name}/{index}")
-                frame = src.copy()
-                entry = data['animations'].get(name,{})
-                if entry.get('width_scales'):
-                    from frame_registration import horizontal_register
-                    frame = horizontal_register(frame, entry['width_scales'][index],
-                                                entry['width_pivot_px'] * canvas[0]/192)
-                frames.append(frame)
-        result[name] = frames
+        entry=data['animations'].get(name,{})
+        result[name]=LazyFrames([Path(root)/name/f'{i:02}.png' for i in range(count)],canvas,cache,
+            entry.get('width_scales'),entry.get('width_pivot_px',0)*canvas[0]/192)
     return result

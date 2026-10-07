@@ -12,12 +12,62 @@ import sys
 import tempfile
 import zipfile
 
-from app_metadata import read_version
+from app_metadata import read_version,APP_TITLE,EXE_BASENAME
 
 ROOT=Path(__file__).resolve().parent
 BUILD=ROOT/'build'
 DIST=ROOT/'dist'
-APP_NAME='Loona-Desktop'
+APP_NAME=EXE_BASENAME
+
+def prepare_icon(root=ROOT):
+    from PIL import Image
+    root=Path(root)
+    with Image.open(root/'packaging/LoonaDesktopPet-icon.png') as image:
+        if image.width!=image.height:raise ValueError('Application icon PNG must be square')
+        image.convert('RGBA').save(root/'assets/app-icon.ico',format='ICO',
+            sizes=[(n,n) for n in (16,24,32,48,64,128,256)])
+
+def verify_branding(executable,version):
+    import ctypes as C
+    from ctypes import wintypes as W
+    executable=str(Path(executable).resolve())
+    library=C.WinDLL('version',use_last_error=True)
+    size_fn=library.GetFileVersionInfoSizeW
+    size_fn.argtypes=[W.LPCWSTR,C.POINTER(W.DWORD)];size_fn.restype=W.DWORD
+    size=size_fn(executable,None)
+    if not size:raise C.WinError(C.get_last_error())
+    buffer=C.create_string_buffer(size)
+    info=library.GetFileVersionInfoW
+    info.argtypes=[W.LPCWSTR,W.DWORD,W.DWORD,C.c_void_p];info.restype=W.BOOL
+    if not info(executable,0,size,buffer):raise C.WinError(C.get_last_error())
+    query=library.VerQueryValueW
+    query.argtypes=[C.c_void_p,W.LPCWSTR,C.POINTER(C.c_void_p),C.POINTER(W.UINT)];query.restype=W.BOOL
+    fields={'ProductName':APP_TITLE,'FileDescription':APP_TITLE,'CompanyName':APP_TITLE,
+            'FileVersion':version,'ProductVersion':version,'OriginalFilename':APP_NAME+'.exe'}
+    for field,expected in fields.items():
+        pointer=C.c_void_p();length=W.UINT()
+        if not query(buffer,'\\StringFileInfo\\040904B0\\'+field,C.byref(pointer),C.byref(length)):
+            raise ValueError(f'Missing Windows version field: {field}')
+        if C.wstring_at(pointer)!=expected:raise ValueError(f'Windows version field mismatch: {field}')
+    kernel=C.WinDLL('kernel32',use_last_error=True)
+    load=kernel.LoadLibraryExW;load.argtypes=[W.LPCWSTR,W.HANDLE,W.DWORD];load.restype=W.HMODULE
+    release=kernel.FreeLibrary;release.argtypes=[W.HMODULE];release.restype=W.BOOL
+    handle=load(executable,None,2)
+    if not handle:raise C.WinError(C.get_last_error())
+    callback_type=C.WINFUNCTYPE(W.BOOL,W.HMODULE,C.c_void_p,C.c_void_p,C.c_ssize_t)
+    enumerate_names=kernel.EnumResourceNamesW
+    enumerate_names.argtypes=[W.HMODULE,C.c_void_p,callback_type,C.c_ssize_t];enumerate_names.restype=W.BOOL
+    try:
+        for kind,minimum in ((14,1),(3,7)):
+            names=[]
+            def collect(module,resource_type,name,parameter):
+                names.append(name)
+                return True
+            callback=callback_type(collect)
+            if not enumerate_names(handle,C.c_void_p(kind),callback,0) or len(names)<minimum:
+                raise ValueError('Multi-size Windows icon missing from executable')
+    finally:release(handle)
+    print(f'PASS: Windows branding: {APP_TITLE}, {APP_NAME}.exe, version {version}, embedded icon',flush=True)
 
 def local_build_environment():
     """Keep dependency downloads, tool caches and subprocess scratch on the project drive."""
@@ -39,6 +89,7 @@ def release_assets(root=ROOT):
     root=Path(root)
     paths=[Path('assets/Loona.png'),Path('assets/revamp/manifest.json'),
            Path('assets/revamp/quality-profile.json'),Path('assets/petting-smile/animation.json')]
+    paths.append(Path('assets/app-icon.ico'))
     manifest=json.loads((root/paths[1]).read_text(encoding='utf-8'))
     for name,entry in manifest['animations'].items():
         if not re.fullmatch(r'[a-z][a-z-]*',name):raise ValueError('Unsafe animation group')
@@ -101,18 +152,20 @@ def verify_archive(archive,name,version,env):
         for asset in release_assets():
             if (package/asset).read_bytes()!=(ROOT/asset).read_bytes():
                 raise ValueError(f'ZIP runtime asset mismatch: {asset}')
+        verify_branding(package/(APP_NAME+'.exe'),version)
         standalone=dict(env)
         for key in list(standalone):
             if key.upper().startswith('PYTHON') or key.upper() in ('VIRTUAL_ENV','CONDA_PREFIX'):
                 standalone.pop(key,None)
         standalone['PATH']=str(Path(os.environ.get('SystemRoot','C:/Windows'))/'System32')
         standalone['LOONA_DATA_DIR']=str(extracted/'user data')
-        for option in ('--self-test','--smoke-test'):
+        for option in ('--self-test','--smoke-test','--memory-test'):
             run([package/(APP_NAME+'.exe'),option],standalone,cwd=extracted,timeout=120)
         print('PASS: extracted ZIP starts without project files or Python on PATH',flush=True)
 
 def check():
     version=read_version(ROOT)
+    prepare_icon()
     assets=release_assets()
     BUILD.mkdir(exist_ok=True)
     # Stage the actual allowlist and verify the content, without making an executable.
@@ -133,9 +186,9 @@ def check():
 
 def version_resource(version):
     numeric=tuple(int(n) for n in version.split('-')[0].split('.'))+(0,)
-    fields={'CompanyName':'Loona Desktop Pet','FileDescription':'Loona Desktop Pet',
+    fields={'CompanyName':APP_TITLE,'FileDescription':APP_TITLE,
             'FileVersion':version,'InternalName':APP_NAME,'OriginalFilename':APP_NAME+'.exe',
-            'ProductName':'Loona Desktop Pet','ProductVersion':version}
+            'ProductName':APP_TITLE,'ProductVersion':version}
     entries=',\n'.join(f'StringStruct({key!r}, {value!r})' for key,value in fields.items())
     return f"VSVersionInfo(ffi=FixedFileInfo(filevers={numeric!r}, prodvers={numeric!r}, mask=0x3f, flags=0, OS=0x40004, fileType=1, subtype=0, date=(0,0)), kids=[StringFileInfo([StringTable('040904B0', [{entries}])]), VarFileInfo([VarStruct('Translation', [1033,1200])])])\n"
 
@@ -169,10 +222,12 @@ def build():
     resource.write_text(version_resource(version),encoding='utf-8')
     run([python,'-m','PyInstaller','--noconfirm','--clean','--onedir','--windowed',
          '--noupx','--name',APP_NAME,'--paths',ROOT,'--version-file',resource,
+         '--icon',ROOT/'assets/app-icon.ico',
          '--distpath',BUILD/'pyinstaller-dist','--workpath',BUILD/'pyinstaller-work',
          '--specpath',BUILD/'spec','main.py'],env)
     raw=inside(BUILD/'pyinstaller-dist'/APP_NAME,BUILD)
     if not (raw/(APP_NAME+'.exe')).is_file():raise FileNotFoundError('PyInstaller produced no executable')
+    verify_branding(raw/(APP_NAME+'.exe'),version)
     # Keep the last build intact: packaging uses a new temporary directory.
     with tempfile.TemporaryDirectory(prefix='package-',dir=BUILD) as temporary:
         package=Path(temporary)/name
@@ -207,7 +262,7 @@ def build():
     (DIST/'RELEASE-ARTIFACTS.json').write_text(json.dumps({'version':version,
         'platform':'windows-x64','publish':[archive.name,name+'.zip.sha256'],
         'zip_sha256':checksum,'zip_bytes':archive.stat().st_size,
-        'validation':'extracted ZIP: checksums, bundled runtimes, assets, self-test and native smoke-test',
+        'validation':'extracted ZIP: checksums, bundled runtimes, assets, self-test, native smoke-test and bounded-cache stress test',
         'requires_installed_python':False},indent=2)+'\n',encoding='utf-8')
     print(f'PASS: local build validated: {archive}\nNothing was tagged, uploaded or published.')
 

@@ -18,7 +18,8 @@ from windows import WindowPlatforms
 from keyboard_activity import KeyboardActivity, TEXT_KEYS, SHORTCUT_KEYS
 from mouse_mood import MouseMood
 from revamp_loader import read_pack, load_pack
-from app_metadata import read_version, user_data_directory
+from app_metadata import read_version, user_data_directory, APP_TITLE, APP_ID
+from frame_cache import ByteLRU
 
 BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 DATA_DIR = user_data_directory(BASE, frozen=getattr(sys,'frozen',False))
@@ -189,7 +190,7 @@ def bind(dll, name, restype, *argtypes):
 class DesktopPet:
     def __init__(self, sheet, smoke=False):
         self.frames = load_frames(sheet)
-        self.hq_frames = load_pack(REVAMP_ROOT / "hq", REVAMP_PACK, canvas=(384, 544)) if REVAMP_PACK else None
+        self.hq_frames = load_pack(REVAMP_ROOT / "hq", REVAMP_PACK, canvas=(384, 544),cache_bytes=8*1024**2) if REVAMP_PACK else None
         # A fixed resting silhouette removes transparent cell padding without
         # changing the collision shape on every animation frame.
         solid = [f.getchannel("A").point(lambda a: 255 if a >= 64 else 0).getbbox()
@@ -252,7 +253,7 @@ class DesktopPet:
         self.x, self.y = None, None
         self.index = 0
         self.drag = None
-        self.cache = {}
+        self.cache = ByteLRU(16*1024**2,lambda value:len(value[1]))
         self.paint_count = 0
         self.started = time.monotonic()
         self.closed = False
@@ -303,6 +304,12 @@ class DesktopPet:
             u.SetProcessDPIAware()
         self.defproc = bind(u, "DefWindowProcW", LRESULT, W.HWND, W.UINT, WPARAM, LPARAM)
         self.instance = bind(k, "GetModuleHandleW", W.HINSTANCE, W.LPCWSTR)(None)
+        shell=C.WinDLL('shell32',use_last_error=True)
+        identity=bind(shell,'SetCurrentProcessExplicitAppUserModelID',C.c_long,W.LPCWSTR)(APP_ID)
+        if identity:logging.warning('AppUserModelID could not be set: %s',identity)
+        self.application_icon=bind(u,'LoadImageW',W.HANDLE,W.HINSTANCE,W.LPCWSTR,W.UINT,
+                                   C.c_int,C.c_int,W.UINT)(None,str(BASE/'assets/app-icon.ico'),1,0,0,0x10|0x40)
+        if not self.application_icon:raise C.WinError(C.get_last_error())
         self.register = bind(u, "RegisterClassW", W.ATOM, C.POINTER(WNDCLASS))
         self.create = bind(u, "CreateWindowExW", W.HWND, W.DWORD, W.LPCWSTR, W.LPCWSTR,
                            W.DWORD, C.c_int, C.c_int, C.c_int, C.c_int,
@@ -337,7 +344,7 @@ class DesktopPet:
         self.destroy_menu = bind(u, "DestroyMenu", W.BOOL, W.HANDLE)
         self.foreground = bind(u, "SetForegroundWindow", W.BOOL, W.HWND)
         self.callback = WNDPROC(self.wndproc)
-        klass = WNDCLASS(0, self.callback, 0, 0, self.instance, None,
+        klass = WNDCLASS(0, self.callback, 0, 0, self.instance, self.application_icon,
                          self.arrow_cursor, None, None, "LoonaDesktopPet")
         if not self.register(C.byref(klass)):
             raise C.WinError(C.get_last_error())
@@ -356,7 +363,7 @@ class DesktopPet:
         self.autonomy = Autonomy(time.monotonic(), self.x, safe_left, safe_right,
                                  {name: sum(data[1]) / 1000 for name, data in STATES.items()})
         self.physics = Physics(time.monotonic(), self.y)
-        self.hwnd = self.create(0x80000 | 0x80 | 0x8, "LoonaDesktopPet", "Loona Desktop",
+        self.hwnd = self.create(0x80000 | 0x80 | 0x8, "LoonaDesktopPet", APP_TITLE,
                                 0x80000000, self.x, self.y, 192, 208, None, None, self.instance, None)
         if not self.hwnd:
             raise C.WinError(C.get_last_error())
@@ -942,12 +949,14 @@ class DesktopPet:
             (width, height), pixels = pixel_bytes(frame, self.scale / 2 if self.hq_frames else self.scale, quality=quality)
         else:
             key = (group, frame_index, self.scale, mirrored, quality)
-            if key not in self.cache:
+            cached=self.cache.get(key)
+            if cached is None:
                 frame = (self.hq_frames or self.frames)[group][frame_index]
                 if mirrored:
                     frame = frame.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-                self.cache[key] = pixel_bytes(frame, self.scale / 2 if self.hq_frames else self.scale, quality=quality)
-            (width, height), pixels = self.cache[key]
+                cached = pixel_bytes(frame, self.scale / 2 if self.hq_frames else self.scale, quality=quality)
+                self.cache.put(key,cached)
+            (width, height), pixels = cached
         screen = self.getdc(None)
         dc = self.memdc(screen)
         bitmap = previous = None
@@ -975,6 +984,42 @@ class DesktopPet:
                 self.deletedc(dc)
             if screen:
                 self.releasedc(None, screen)
+
+    def memory_stress(self):
+        """Hidden diagnostic: exercise every frame, scale and quality mode without saving settings."""
+        if not self.smoke:raise ValueError('Memory diagnostics require hidden smoke mode')
+        original=(self.state,self.index,self.look_index,self.scale,self.motion_facing,self.uniform_quality)
+        try:
+            for uniform in (True,False):
+                self.uniform_quality=uniform
+                for scale in SCALES:
+                    self.scale=scale
+                    for group,frames in self.frames.items():
+                        self.state='idle' if group=='look' else group
+                        for facing in ((1,-1) if group in ('falling','slipping') else (1,)):
+                            self.motion_facing=facing
+                            for index in range(len(frames)):
+                                self.look_index=index if group=='look' else None
+                                self.index=0 if group=='look' else index
+                                self.render()
+                                assert self.cache.resident_bytes<=self.cache.max_bytes
+            if self.petting_visuals:
+                self.look_index=None;self.state='idle';self.index=0;self.petting_happy=True
+                for scale in SCALES:
+                    self.scale=scale
+                    for step in range(80):
+                        self.petting_visual_age=step*.075
+                        self.render()
+            for pack in (self.frames,self.hq_frames):
+                if pack and REVAMP_PACK:
+                    cache=next(iter(pack.values())).cache
+                    assert cache.resident_bytes<=cache.max_bytes
+            logging.info('MEMORY PASS: every frame, all scales, both quality modes, mirrored falls and animated hearts; render cache %s/%s bytes',
+                         self.cache.resident_bytes,self.cache.max_bytes)
+        finally:
+            self.petting_happy=False
+            self.state,self.index,self.look_index,self.scale,self.motion_facing,self.uniform_quality=original
+            self.deadline=time.monotonic()+self.duration()
 
     def save(self):
         if self.smoke:
@@ -1249,21 +1294,24 @@ class DesktopPet:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Loona Desktop — самостоятельный проигрыватель спрайтов")
+    parser = argparse.ArgumentParser(description=APP_TITLE+" — самостоятельный проигрыватель спрайтов")
     parser.add_argument("--sheet", type=Path, default=BASE / "assets" / "Loona.png")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument('--memory-test',action='store_true',help='Hidden full-animation cache stress test')
     parser.add_argument("--version", action="store_true", help="Show version from VERSION")
     args = parser.parse_args()
     if args.version:
         version=read_version(BASE)
         if sys.stdout is not None:print(version)
-        else:logging.info('Loona Desktop version %s',version)
+        else:logging.info('%s version %s',APP_TITLE,version)
         return 0
     if args.self_test:
         self_test(args.sheet)
         return 0
-    return DesktopPet(args.sheet, smoke=args.smoke_test).run()
+    app=DesktopPet(args.sheet, smoke=args.smoke_test or args.memory_test)
+    if args.memory_test:app.memory_stress()
+    return app.run()
 
 
 if __name__ == "__main__":
@@ -1274,6 +1322,6 @@ if __name__ == "__main__":
         sys.exit(main())
     except Exception as error:
         logging.exception("Startup failed")
-        if "--smoke-test" not in sys.argv:
-            C.windll.user32.MessageBoxW(None, str(error) + "\n\nПодробности: " + str(DATA_DIR/'desktop-pet.log'), "Loona Desktop", 16)
+        if not any(flag in sys.argv for flag in ('--smoke-test','--memory-test','--self-test')):
+            C.windll.user32.MessageBoxW(None, str(error) + "\n\nПодробности: " + str(DATA_DIR/'desktop-pet.log'), APP_TITLE, 16)
         sys.exit(1)

@@ -76,8 +76,8 @@ class SyncTests(unittest.TestCase):
     def test_executable_layout_moves_sources_and_preserves_repository_files(self):
         self.write(self.source,'packaging/repository.gitignore','ignore runtime caches')
         self.write(self.source,'packaging/repository.gitattributes','binary runtime')
-        package=self.source/'dist/Loona-Desktop-1.0.0-windows-x64'
-        for name,text in {'VERSION':'1.0.0','Loona-Desktop.exe':'exe',
+        package=self.source/'dist/LoonaDesktopPet-1.0.0-windows-x64'
+        for name,text in {'VERSION':'1.0.0','LoonaDesktopPet.exe':'exe',
                           '_internal/python312.dll':'dll','assets/current/00.png':'current frame'}.items():
             self.write(package,name,text)
         lines=[digest(p)+'  '+p.relative_to(package).as_posix()
@@ -86,7 +86,7 @@ class SyncTests(unittest.TestCase):
         preserved=preserved_snapshot(self.target,True)
         with contextlib.redirect_stdout(io.StringIO()):
             synchronize(self.source,self.target,True,published_layout=True)
-        self.assertTrue((self.target/'Loona-Desktop.exe').is_file())
+        self.assertTrue((self.target/'LoonaDesktopPet.exe').is_file())
         self.assertTrue((self.target/'Loona-Desktop/main.py').is_file())
         self.assertTrue((self.target/'Loona-Desktop/tests/fixtures/data.txt').is_file())
         self.assertFalse((self.target/'main.py').exists())

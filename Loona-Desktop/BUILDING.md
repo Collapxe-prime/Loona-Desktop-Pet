@@ -33,6 +33,9 @@ py -3.12 build.py
 встроенный Python, Microsoft C runtime и кадры. Распакованный EXE запускается из
 отдельной папки с PATH только для системных библиотек Windows, без путей Python,
 виртуального окружения и исходников. Ошибка проверки останавливает сборку.
+Также выполняется скрытая `--memory-test`: все кадры, три масштаба, оба режима качества,
+отражённые падения и поглаживание с сердечками. Она проверяет лимиты кэшей без сохранения
+настроек пользователя и без появления дополнительных питомцев на рабочем столе.
 Первый запуск требует доступа к PyPI. Зависимости установлены только в окружение сборки.
 Зафиксированы прямые и транзитивные зависимости сборки; фактически установленные версии
 записываются в `BUILD-INFO.json`. Побайтовая идентичность EXE между сборками не обещается.
@@ -52,8 +55,8 @@ py -3.12 build.py
 build/                                  временные файлы, проверки и PyInstaller
 .build-venv/                            отдельный Python для сборки
 dist/
-  Loona-Desktop-<VERSION>-windows-x64/
-    Loona-Desktop.exe
+  LoonaDesktopPet-<VERSION>-windows-x64/
+    LoonaDesktopPet.exe
     _internal/                          Python и библиотеки
     assets/                             только рабочие PNG и JSON
     VERSION
@@ -61,8 +64,8 @@ dist/
     CHANGELOG.md
     BUILD-INFO.json
     SHA256SUMS.txt
-  Loona-Desktop-<VERSION>-windows-x64.zip
-  Loona-Desktop-<VERSION>-windows-x64.zip.sha256
+  LoonaDesktopPet-<VERSION>-windows-x64.zip
+  LoonaDesktopPet-<VERSION>-windows-x64.zip.sha256
   RELEASE-ARTIFACTS.json                  точный список файлов для публикации
 ```
 
@@ -73,12 +76,12 @@ dist/
 ## Передача release manager
 
 После успешной команды сборки публикуются только два файла из `dist`:
-`Loona-Desktop-<VERSION>-windows-x64.zip` и его `.zip.sha256`.
+`LoonaDesktopPet-<VERSION>-windows-x64.zip` и его `.zip.sha256`.
 Их имена, версия, размер и контрольная сумма записаны в `RELEASE-ARTIFACTS.json`.
 Сам JSON — локальная инструкция; вручную подбирать DLL, кадры или папки не нужно.
 ZIP уже содержит EXE, `_internal` со встроенным Python и библиотеками, все рабочие
 анимации и ресурсы, VERSION, инструкцию, changelog и контрольные суммы.
-Пользователь Windows x64 распаковывает ZIP целиком и запускает `Loona-Desktop.exe`.
+Пользователь Windows x64 распаковывает ZIP целиком и запускает `LoonaDesktopPet.exe`.
 Установка Python и зависимостей не требуется. Сборка не подписана цифровой подписью.
 
 PyInstaller собирает приложение на целевой ОС; инструкция основана на
@@ -107,3 +110,20 @@ PyInstaller собирает приложение на целевой ОС; ин
 Собранная версия использует `%LOCALAPPDATA%\LoonaDesktopPet`; assets и VERSION
 остаются в папке установки. Во время проверок `LOONA_DATA_DIR` указывает внутрь
 `build`, поэтому проверки не затрагивают личный конфиг.
+
+## Память и диагностика
+
+Кадры остаются PNG на диске и декодируются по необходимости. LRU-кэши ограничены
+по объёму: обычные кадры 4 MiB, HQ 8 MiB, поглаживание 4 MiB, готовые пиксели 16 MiB.
+Это лимиты содержимого кэшей, а не всей памяти процесса. Качество и все кадры сохранены.
+NumPy используется только инструментом оценки резкости, при обычной работе не импортируется.
+
+Замер Windows x64 2026-10-07, одинаковая скрытая проверка готовых EXE:
+старый peak working set 460.64 MiB, новый 56.35 MiB. Полный стресс нового EXE — 74.16 MiB.
+Это измеренные пики конкретных проверок, а не обещание фиксированного потребления на любом ПК.
+Отчёты сохраняются локально в `build/memory-*.json`.
+
+```powershell
+python tests/profile_memory.py dist/LoonaDesktopPet-1.0.0-windows-x64/LoonaDesktopPet.exe build/memory-after.json
+python tests/profile_memory.py dist/LoonaDesktopPet-1.0.0-windows-x64/LoonaDesktopPet.exe build/memory-stress.json --stress
+```

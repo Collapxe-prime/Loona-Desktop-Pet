@@ -1,0 +1,15 @@
+{
+  "frames": 8,
+  "canvas_hq": [
+    384,
+    544
+  ],
+  "ground_hq": 404,
+  "radii_hq": {
+    "1": 0.7343,
+    "1.5": 0.882,
+    "2": 0.9296
+  },
+  "trigger_seconds": 2,
+  "method": "complete drawings aligned by standing silhouette size and planted feet; no isolated body parts"
+}

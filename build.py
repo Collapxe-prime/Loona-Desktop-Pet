@@ -1,0 +1,183 @@
+"""Local Windows build only: no Git commands, tags, uploads or publication."""
+from pathlib import Path
+import argparse
+import hashlib
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+
+from app_metadata import read_version
+
+ROOT=Path(__file__).resolve().parent
+BUILD=ROOT/'build'
+DIST=ROOT/'dist'
+APP_NAME='Loona-Desktop'
+
+def local_build_environment():
+    """Keep dependency downloads, tool caches and subprocess scratch on the project drive."""
+    folders={'TEMP':BUILD/'tmp','TMP':BUILD/'tmp',
+             'PIP_CACHE_DIR':BUILD/'cache/pip','PYINSTALLER_CONFIG_DIR':BUILD/'cache/pyinstaller'}
+    env=dict(os.environ)
+    for key,path in folders.items():
+        path.mkdir(parents=True,exist_ok=True)
+        env[key]=str(path)
+    return env
+
+def inside(path,parent):
+    path=Path(path).resolve()
+    path.relative_to(Path(parent).resolve())
+    return path
+
+def release_assets(root=ROOT):
+    """Positive allowlist: build cannot copy scratch files or machine state."""
+    root=Path(root)
+    paths=[Path('assets/Loona.png'),Path('assets/revamp/manifest.json'),
+           Path('assets/revamp/quality-profile.json'),Path('assets/petting-smile/animation.json')]
+    manifest=json.loads((root/paths[1]).read_text(encoding='utf-8'))
+    for name,entry in manifest['animations'].items():
+        if not re.fullmatch(r'[a-z][a-z-]*',name):raise ValueError('Unsafe animation group')
+        durations=entry['durations_ms']
+        if not durations or any(not isinstance(d,(float,int)) or d<=0 for d in durations):
+            raise ValueError(f'Invalid animation duration: {name}')
+        for i in range(len(durations)):
+            paths.extend([Path(f'assets/revamp/{name}/{i:02}.png'),Path(f'assets/revamp/hq/{name}/{i:02}.png')])
+    for i in range(16):
+        paths.extend([Path(f'assets/revamp/look/{i:02}.png'),Path(f'assets/revamp/hq/look/{i:02}.png')])
+    # These small legacy folders are used to discover the four extra states at startup.
+    for name in ('sitting','falling','slipping','balancing'):
+        paths.extend(Path(f'assets/animations/{name}/{i:02}.png') for i in range(12))
+    for folder in ('hq','frames'):
+        paths.extend(Path(f'assets/petting-smile/{folder}/{i:02}.png') for i in range(8))
+    for relative in paths:
+        file=inside(root/relative,root)
+        if not file.is_file():raise FileNotFoundError(file)
+    return paths
+
+def stage_assets(destination,root=ROOT):
+    destination=Path(destination)
+    paths=release_assets(root)
+    for relative in paths:
+        target=inside(destination/relative,destination)
+        target.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(Path(root)/relative,target)
+    return paths
+
+def run(command,env=None):
+    print('>',subprocess.list2cmdline([str(c) for c in command]),flush=True)
+    subprocess.run([str(c) for c in command],cwd=ROOT,env=env,check=True)
+
+def check():
+    version=read_version(ROOT)
+    assets=release_assets()
+    BUILD.mkdir(exist_ok=True)
+    # Stage the actual allowlist and verify the content, without making an executable.
+    with tempfile.TemporaryDirectory(prefix='package-check-',dir=BUILD) as temporary:
+        staged=Path(temporary)
+        stage_assets(staged)
+        for relative in assets:
+            if (ROOT/relative).read_bytes()!=(staged/relative).read_bytes():
+                raise ValueError(f'Staging mismatch: {relative}')
+        if len(list(staged.rglob('*.*')))!=len(assets):
+            raise ValueError('Unexpected files in staged assets')
+    env=dict(local_build_environment(),LOONA_DATA_DIR=str(BUILD/'check-user-data'))
+    run([sys.executable,'-m','unittest','discover','-s','tests'],env)
+    run([sys.executable,'main.py','--self-test'],env)
+    run([sys.executable,'main.py','--smoke-test'],env)
+    print(f'PASS: build inputs for {version}; {len(assets)} runtime asset files; no user state or dev artifacts',flush=True)
+    return version
+
+def version_resource(version):
+    numeric=tuple(int(n) for n in version.split('-')[0].split('.'))+(0,)
+    fields={'CompanyName':'Loona Desktop Pet','FileDescription':'Loona Desktop Pet',
+            'FileVersion':version,'InternalName':APP_NAME,'OriginalFilename':APP_NAME+'.exe',
+            'ProductName':'Loona Desktop Pet','ProductVersion':version}
+    entries=',\n'.join(f'StringStruct({key!r}, {value!r})' for key,value in fields.items())
+    return f"VSVersionInfo(ffi=FixedFileInfo(filevers={numeric!r}, prodvers={numeric!r}, mask=0x3f, flags=0, OS=0x40004, fileType=1, subtype=0, date=(0,0)), kids=[StringFileInfo([StringTable('040904B0', [{entries}])]), VarFileInfo([VarStruct('Translation', [1033,1200])])])\n"
+
+def build():
+    if sys.platform!='win32' or platform.machine().upper() not in ('AMD64','X86_64'):
+        raise RuntimeError('Build on Windows x64; PyInstaller is not a cross-compiler')
+    if sys.version_info[:2]!=(3,12):raise RuntimeError('Use Python 3.12 for the verified build environment')
+    version=read_version(ROOT)
+    name=f'{APP_NAME}-{version}-windows-x64'
+    destination=inside(DIST/name,DIST)
+    archive=inside(DIST/(name+'.zip'),DIST)
+    if destination.exists() or archive.exists():
+        raise FileExistsError('This version already has a local build in dist; move it away before rebuilding')
+    environment=inside(ROOT/'.build-venv',ROOT)
+    python=environment/'Scripts/python.exe'
+    env=local_build_environment()
+    env['PYTHONNOUSERSITE']='1'
+    env.pop('PYTHONPATH',None)
+    if not python.exists():run([sys.executable,'-m','venv',environment],env)
+    configuration=(environment/'pyvenv.cfg').read_text().lower()
+    if 'include-system-site-packages = false' not in configuration:
+        raise RuntimeError('.build-venv must not inherit system packages')
+    # Recover an interrupted venv bootstrap without touching the development environment.
+    probe=subprocess.run([str(python),'-m','pip','--version'],env=env,capture_output=True)
+    if probe.returncode:run([python,'-m','ensurepip','--upgrade','--default-pip'],env)
+    run([python,'-m','pip','install','--disable-pip-version-check','-r','requirements-build.txt'],env)
+    # All checks run in the same clean environment that compiles the application.
+    run([python,'build.py','--check'],env)
+    BUILD.mkdir(exist_ok=True);DIST.mkdir(exist_ok=True)
+    resource=BUILD/'windows-version.txt'
+    resource.write_text(version_resource(version),encoding='utf-8')
+    run([python,'-m','PyInstaller','--noconfirm','--clean','--onedir','--windowed',
+         '--noupx','--name',APP_NAME,'--paths',ROOT,'--version-file',resource,
+         '--distpath',BUILD/'pyinstaller-dist','--workpath',BUILD/'pyinstaller-work',
+         '--specpath',BUILD/'spec','main.py'],env)
+    raw=inside(BUILD/'pyinstaller-dist'/APP_NAME,BUILD)
+    if not (raw/(APP_NAME+'.exe')).is_file():raise FileNotFoundError('PyInstaller produced no executable')
+    # Keep the last build intact: packaging uses a new temporary directory.
+    with tempfile.TemporaryDirectory(prefix='package-',dir=BUILD) as temporary:
+        package=Path(temporary)/name
+        shutil.copytree(raw,package)
+        assets=stage_assets(package)
+        for document in ('VERSION','CHANGELOG.md'):
+            shutil.copy2(ROOT/document,package/document)
+        shutil.copy2(ROOT/'packaging/README.txt',package/'README.txt')
+        metadata=json.loads(subprocess.check_output([str(python),'-m','pip','list','--format=json'],env=env))
+        (package/'BUILD-INFO.json').write_text(json.dumps({'version':version,'platform':'windows-x64',
+            'python':platform.python_version(),'runtime_asset_files':len(assets),'dependencies':metadata},indent=2))
+        test_env=dict(env,LOONA_DATA_DIR=str(BUILD/'frozen-check-user-data'))
+        run([package/(APP_NAME+'.exe'),'--self-test'],test_env)
+        run([package/(APP_NAME+'.exe'),'--smoke-test'],test_env)
+        forbidden={'settings.json','desktop-pet.log','tests','backups','.venv','.idea','sources'}
+        if any(p.name in forbidden for p in package.rglob('*')):
+            raise ValueError('Development or user files leaked into package')
+        # SHA256SUMS describes every payload file, including all third-party runtime DLLs.
+        hashes=[]
+        for file in sorted(p for p in package.rglob('*') if p.is_file()):
+            hashes.append(hashlib.sha256(file.read_bytes()).hexdigest()+'  '+file.relative_to(package).as_posix())
+        (package/'SHA256SUMS.txt').write_text('\n'.join(hashes)+'\n')
+        temporary_zip=Path(temporary)/(name+'.zip')
+        with zipfile.ZipFile(temporary_zip,'w',compression=zipfile.ZIP_DEFLATED) as zipped:
+            for file in sorted(p for p in package.rglob('*') if p.is_file()):
+                zipped.write(file,arcname=name+'/'+file.relative_to(package).as_posix())
+        with zipfile.ZipFile(temporary_zip) as zipped:
+            bad=zipped.testzip()
+            if bad:raise ValueError(f'Archive integrity failure: {bad}')
+        shutil.move(str(package),str(destination))
+        shutil.move(str(temporary_zip),str(archive))
+    checksum=hashlib.sha256(archive.read_bytes()).hexdigest()
+    (DIST/(name+'.zip.sha256')).write_text(checksum+'  '+archive.name+'\n')
+    print(f'PASS: local build validated: {archive}\nNothing was tagged, uploaded or published.')
+
+def main():
+    parser=argparse.ArgumentParser(description='Validate or build Loona locally; never publish')
+    parser.add_argument('--check',action='store_true',help='Validate files and tests without compiling or downloading dependencies')
+    args=parser.parse_args()
+    try:
+        check() if args.check else build()
+    except (OSError,ValueError,RuntimeError,subprocess.CalledProcessError) as error:
+        print(f'Build failed: {error}',file=sys.stderr)
+        return 1
+    return 0
+
+if __name__=='__main__':sys.exit(main())

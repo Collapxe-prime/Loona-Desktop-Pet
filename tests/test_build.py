@@ -1,9 +1,9 @@
 """Packaging contract: version source, user-state separation and Git filtering."""
 from pathlib import Path
-import os,shutil,subprocess,tempfile,unittest
+import os,shutil,subprocess,tempfile,unittest,zipfile
 from unittest.mock import patch
 from app_metadata import read_version,user_data_directory
-from build import release_assets,version_resource
+from build import release_assets,version_resource,verify_archive,BUILD
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -34,7 +34,8 @@ class BuildTests(unittest.TestCase):
             self.assertNotEqual(path.name,'settings.json')
             self.assertNotEqual(path.suffix,'.gif')
 
-    @unittest.skipUnless(shutil.which('git'),'Git is optional for building')
+    @unittest.skipUnless(shutil.which('git') and os.environ.get('LOONA_TEST_GIT')=='1',
+                         'Git fixture is opt-in only; normal builds never run Git commands')
     def test_gitignore_filters_dev_files_but_keeps_every_required_runtime_asset(self):
         ignored=['settings.json','settings.json.tmp','desktop-pet.log','.venv/pyvenv.cfg',
                  '.build-venv/pyvenv.cfg','.idea/workspace.xml','__pycache__/main.pyc',
@@ -55,5 +56,26 @@ class BuildTests(unittest.TestCase):
                 input=('\0'.join(ignored+required)+'\0').encode(),capture_output=True)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(set(result.stdout.decode().rstrip('\0').split('\0')),set(ignored))
+
+    def test_downloadable_zip_without_embedded_python_is_rejected(self):
+        BUILD.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=BUILD) as tmp:
+            archive=Path(tmp)/'broken.zip'
+            with zipfile.ZipFile(archive,'w') as zipped:
+                zipped.writestr('app/VERSION','1.0.0')
+            with self.assertRaisesRegex(ValueError,'Embedded Python runtime missing'):
+                verify_archive(archive,'app','1.0.0',{})
+
+    def test_downloadable_zip_with_corrupt_payload_is_rejected_before_launch(self):
+        BUILD.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=BUILD) as tmp:
+            archive=Path(tmp)/'corrupt.zip'
+            with zipfile.ZipFile(archive,'w') as zipped:
+                zipped.writestr('app/VERSION','1.0.0')
+                zipped.writestr('app/_internal/python312.dll','fixture')
+                zipped.writestr('app/_internal/vcruntime140.dll','fixture')
+                zipped.writestr('app/SHA256SUMS.txt','0'*64+'  VERSION\n')
+            with self.assertRaisesRegex(ValueError,'checksum mismatch'):
+                verify_archive(archive,'app','1.0.0',{})
 
 if __name__=='__main__':unittest.main()

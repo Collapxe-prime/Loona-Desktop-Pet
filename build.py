@@ -68,9 +68,48 @@ def stage_assets(destination,root=ROOT):
         shutil.copy2(Path(root)/relative,target)
     return paths
 
-def run(command,env=None):
+def run(command,env=None,cwd=ROOT,timeout=None):
     print('>',subprocess.list2cmdline([str(c) for c in command]),flush=True)
-    subprocess.run([str(c) for c in command],cwd=ROOT,env=env,check=True)
+    subprocess.run([str(c) for c in command],cwd=cwd,env=env,check=True,timeout=timeout)
+
+def verify_archive(archive,name,version,env):
+    """Test the exact downloadable ZIP in a fresh directory, without source/Python paths."""
+    with tempfile.TemporaryDirectory(prefix='unpacked release ',dir=BUILD) as temporary:
+        extracted=Path(temporary)
+        with zipfile.ZipFile(archive) as zipped:
+            bad=zipped.testzip()
+            if bad:raise ValueError(f'Archive integrity failure: {bad}')
+            for entry in zipped.infolist():
+                inside(extracted/entry.filename,extracted)
+            zipped.extractall(extracted)
+        package=extracted/name
+        if read_version(package)!=version:raise ValueError('ZIP version mismatch')
+        if not (package/'_internal/python312.dll').is_file():
+            raise ValueError('Embedded Python runtime missing from ZIP')
+        if not list((package/'_internal').rglob('vcruntime140*.dll')):
+            raise ValueError('Microsoft C runtime missing from ZIP')
+        expected={}
+        for line in (package/'SHA256SUMS.txt').read_text().splitlines():
+            digest,relative=line.split('  ',1)
+            file=inside(package/relative,package)
+            if hashlib.sha256(file.read_bytes()).hexdigest()!=digest:
+                raise ValueError(f'ZIP payload checksum mismatch: {relative}')
+            expected[relative]=digest
+        actual={p.relative_to(package).as_posix() for p in package.rglob('*') if p.is_file()}
+        if actual!=set(expected)|{'SHA256SUMS.txt'}:
+            raise ValueError('Unexpected or missing ZIP payload files')
+        for asset in release_assets():
+            if (package/asset).read_bytes()!=(ROOT/asset).read_bytes():
+                raise ValueError(f'ZIP runtime asset mismatch: {asset}')
+        standalone=dict(env)
+        for key in list(standalone):
+            if key.upper().startswith('PYTHON') or key.upper() in ('VIRTUAL_ENV','CONDA_PREFIX'):
+                standalone.pop(key,None)
+        standalone['PATH']=str(Path(os.environ.get('SystemRoot','C:/Windows'))/'System32')
+        standalone['LOONA_DATA_DIR']=str(extracted/'user data')
+        for option in ('--self-test','--smoke-test'):
+            run([package/(APP_NAME+'.exe'),option],standalone,cwd=extracted,timeout=120)
+        print('PASS: extracted ZIP starts without project files or Python on PATH',flush=True)
 
 def check():
     version=read_version(ROOT)
@@ -85,7 +124,7 @@ def check():
                 raise ValueError(f'Staging mismatch: {relative}')
         if len(list(staged.rglob('*.*')))!=len(assets):
             raise ValueError('Unexpected files in staged assets')
-    env=dict(local_build_environment(),LOONA_DATA_DIR=str(BUILD/'check-user-data'))
+    env=dict(local_build_environment(),LOONA_DATA_DIR=str(BUILD/'check-user-data'),LOONA_TEST_GIT='0')
     run([sys.executable,'-m','unittest','discover','-s','tests'],env)
     run([sys.executable,'main.py','--self-test'],env)
     run([sys.executable,'main.py','--smoke-test'],env)
@@ -160,13 +199,16 @@ def build():
         with zipfile.ZipFile(temporary_zip,'w',compression=zipfile.ZIP_DEFLATED) as zipped:
             for file in sorted(p for p in package.rglob('*') if p.is_file()):
                 zipped.write(file,arcname=name+'/'+file.relative_to(package).as_posix())
-        with zipfile.ZipFile(temporary_zip) as zipped:
-            bad=zipped.testzip()
-            if bad:raise ValueError(f'Archive integrity failure: {bad}')
+        verify_archive(temporary_zip,name,version,env)
         shutil.move(str(package),str(destination))
         shutil.move(str(temporary_zip),str(archive))
     checksum=hashlib.sha256(archive.read_bytes()).hexdigest()
     (DIST/(name+'.zip.sha256')).write_text(checksum+'  '+archive.name+'\n')
+    (DIST/'RELEASE-ARTIFACTS.json').write_text(json.dumps({'version':version,
+        'platform':'windows-x64','publish':[archive.name,name+'.zip.sha256'],
+        'zip_sha256':checksum,'zip_bytes':archive.stat().st_size,
+        'validation':'extracted ZIP: checksums, bundled runtimes, assets, self-test and native smoke-test',
+        'requires_installed_python':False},indent=2)+'\n',encoding='utf-8')
     print(f'PASS: local build validated: {archive}\nNothing was tagged, uploaded or published.')
 
 def main():
@@ -175,7 +217,7 @@ def main():
     args=parser.parse_args()
     try:
         check() if args.check else build()
-    except (OSError,ValueError,RuntimeError,subprocess.CalledProcessError) as error:
+    except (OSError,ValueError,RuntimeError,subprocess.CalledProcessError,subprocess.TimeoutExpired) as error:
         print(f'Build failed: {error}',file=sys.stderr)
         return 1
     return 0

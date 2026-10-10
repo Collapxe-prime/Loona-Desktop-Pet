@@ -5,7 +5,7 @@ from frame_cache import ByteLRU,LazyFrames
 from build import BUILD
 from revamp_loader import load_pack
 from main import REVAMP_ROOT,REVAMP_PACK,pixel_bytes
-from frame_registration import horizontal_register
+from frame_registration import horizontal_register,uniform_register
 
 class FrameCacheTests(unittest.TestCase):
     def test_byte_limit_lru_replacement_and_oversized_values(self):
@@ -28,6 +28,8 @@ class FrameCacheTests(unittest.TestCase):
                 with Image.open(REVAMP_ROOT/'hq'/name/f'{index:02}.png') as src:expected=src.copy()
                 if entry.get('width_scales'):
                     expected=horizontal_register(expected,entry['width_scales'][index],entry['width_pivot_px']*2)
+                if entry.get('display_scale'):
+                    expected=uniform_register(expected,entry['display_scale'],tuple(v*2 for v in entry['display_pivot_px']))
                 actual=pack[name][index]
                 self.assertEqual(actual.tobytes(),expected.tobytes())
                 self.assertEqual(pixel_bytes(actual,.5),pixel_bytes(expected,.5))
@@ -42,5 +44,22 @@ class FrameCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=BUILD) as directory:
             file=Path(directory)/'invalid.png';Image.new('RGB',(2,2)).save(file)
             with self.assertRaises(ValueError):LazyFrames([file],(2,2),ByteLRU(16,len))
+
+    def test_uniform_registration_preserves_contact_and_normal_hq_geometry(self):
+        normal=load_pack(REVAMP_ROOT,REVAMP_PACK)
+        hq=load_pack(REVAMP_ROOT/'hq',REVAMP_PACK,canvas=(384,544))
+        heights={}
+        for name in ('idle','falling','sitting-taskbar'):
+            heights[name]=[]
+            for index in range(len(normal[name])):
+                bounds=normal[name][index].getchannel('A').point(lambda a:255 if a>=32 else 0).getbbox()
+                high=hq[name][index].getchannel('A').point(lambda a:255 if a>=32 else 0).getbbox()
+                heights[name].append(bounds[3]-bounds[1])
+                for low_value,high_value in zip(bounds,high):
+                    self.assertLessEqual(abs(low_value-high_value/2),2)
+                if name=='sitting-taskbar':
+                    self.assertLessEqual(abs(bounds[3]-203),1)
+        self.assertLess(max(heights['sitting-taskbar']),min(heights['idle'])*.8)
+        self.assertGreater(min(heights['falling']),min(heights['idle']))
 
 if __name__=='__main__':unittest.main()

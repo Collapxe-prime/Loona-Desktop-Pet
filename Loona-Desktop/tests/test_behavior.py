@@ -42,6 +42,143 @@ def pet(selected="idle", look=True, scale=1):
 
 
 class BehaviorTests(unittest.TestCase):
+    def test_sitting_near_taskbar_stays_visible_after_window_support_disappears(self):
+        from pathlib import Path
+        from PIL import Image
+        from main import REVAMP_ROOT
+        from physics import Physics
+        from types import SimpleNamespace
+        boxes=[]
+        for path in Path(REVAMP_ROOT,'sitting-taskbar').glob('*.png'):
+            with Image.open(path) as image:
+                boxes.append(image.getchannel('A').point(lambda a:255 if a>=8 else 0).getbbox())
+        bounds=(min(b[0] for b in boxes),min(b[1] for b in boxes),
+                max(b[2] for b in boxes),max(b[3] for b in boxes))
+        for scale in (1,1.5,2):
+            app=pet(scale=scale)
+            app.state='sitting';app.sitting_bounds=(40,96,171,252)
+            app.taskbar_sitting_bounds=bounds
+            app.x=-900;app.y=1040-round(208*scale)
+            app.physics_enabled=app.windows_enabled=True;app.smoke=False
+            app.physics=Physics(0,app.y)
+            app.physics.support=(-1920,1040,0,42,-1920,0,'bottom',False)
+            app.window_platforms=SimpleNamespace(scan=lambda now: [])
+            app.save=lambda:None
+            original_y=app.y
+            app.update_physics(.05)
+            self.assertIsNone(app.physics.support)
+            self.assertEqual(app.y,original_y)
+            self.assertEqual(app.render_group()[0],'sitting-taskbar')
+            for index,box in enumerate(boxes):
+                app.index=index
+                x,y=app.render_position()
+                self.assertLessEqual(y+round(box[3]*scale),1040)
+                self.assertEqual(y,1040-round(bounds[3]*scale))
+            # The normal hanging-leg pose is unchanged on a higher window.
+            app.y=300
+            app.physics.support=(-1920,508,0,42,-1920,1,'top',False)
+            self.assertEqual(app.render_group()[0],'sitting')
+            self.assertEqual(app.render_position(),(app.x,300))
+            app.state='idle';app.y=original_y
+            self.assertEqual(app.render_position(),(app.x,original_y))
+
+    def test_petting_tracks_visible_seated_sprite_above_taskbar(self):
+        from head_petting import HeadPetting
+        app=pet();app.head_petting=HeadPetting()
+        app.sitting_bounds=(40,96,171,252)
+        app.taskbar_sitting_bounds=(38,67,156,203)
+        app.state='sitting';app.y=832
+        app.autonomy.action,app.autonomy.until='sitting',100
+        for i in range(201):
+            phase=i%32
+            x=88+2*(phase if phase<=16 else 32-phase)
+            display_x,display_y=app.render_position()
+            app.update_behavior(i*.02,(display_x+x,display_y+150))
+            if i<200:self.assertEqual(app.state,'sitting')
+        self.assertTrue(app.petting_active)
+        self.assertFalse(app.autonomy.sitting_committed)
+
+    def test_low_window_uses_floor_pose_without_lifting_physical_seat(self):
+        from main import STATES
+        from physics import Physics
+        app=pet();app.state='sitting'
+        app.sitting_bounds=(40,96,171,252)
+        app.physics=Physics(0,832)
+        app.y=832
+        app.physics.support=(-1920,1040,0,42,-1920,0,'bottom',False)
+        self.assertEqual(app.render_group(),('sitting-taskbar',0))
+        x,y=app.render_position()
+        self.assertEqual(y+203,app.y+208)
+        self.assertEqual(app.physics.support[1],1040)
+        self.assertEqual(app.y,832)
+        self.assertEqual(app.duration(),STATES['sitting-taskbar'][1][0]/1000)
+
+    def test_sitting_ignores_typing_and_cursor_but_resumes_after_fall_balance_and_inspection(self):
+        from types import SimpleNamespace
+        from physics import Physics
+        from head_petting import HeadPetting
+        from mouse_mood import MouseMood
+        app=pet();app.head_petting=HeadPetting();app.mouse_mood=MouseMood()
+        app.keyboard_activity=SimpleNamespace(animation=lambda *args:'jumping')
+        app.typing_enabled=app.typing_waiting=True
+        app.autonomy.action,app.autonomy.until='sitting',100
+        app.update_behavior(0,(1800,50))
+        app.update_behavior(1,(app.x+96,app.y+104))
+        self.assertEqual(app.state,'sitting')
+        self.assertIsNone(app.look_index)
+        app.drag=(0,0)
+        app.update_behavior(10,(1800,50))
+        self.assertEqual(app.state,'balancing')
+        self.assertEqual(app.autonomy.sitting_remaining,90)
+        app.drag=None;app.physics_enabled=True;app.physics=Physics(10,app.y)
+        app.physics.grounded=False
+        app.request_inspection()
+        app.autonomy.recenter(15,app.x,-1000,1000)
+        app.update_behavior(30,(1800,50))
+        self.assertEqual(app.state,'falling')
+        app.physics.grounded=True;app.landing_balance_cycles=1
+        app.update_behavior(40,(1800,50))
+        self.assertEqual(app.state,'balancing')
+        app.landing_balance_cycles=0
+        app.update_behavior(41,(1800,50))
+        self.assertIsNotNone(app.look_index)
+        self.assertEqual(app.autonomy.sitting_remaining,90)
+        app.update_behavior(44,(1800,50))
+        self.assertEqual(app.state,'sitting')
+        self.assertIsNone(app.look_index)
+        self.assertEqual(app.autonomy.until,134)
+
+    def test_sitting_requires_four_seconds_of_continuous_petting_to_cancel(self):
+        from head_petting import HeadPetting
+        app=pet();app.head_petting=HeadPetting()
+        app.autonomy.action,app.autonomy.until='sitting',100
+        for i in range(201):
+            phase=i%32
+            x=88+2*(phase if phase<=16 else 32-phase)
+            app.update_behavior(i*.02,(app.x+x,app.y+140))
+            if i<200:
+                self.assertEqual(app.state,'sitting')
+                self.assertFalse(app.petting_active)
+        self.assertEqual(app.state,'idle')
+        self.assertTrue(app.petting_active)
+        self.assertFalse(app.autonomy.sitting_committed)
+
+    def test_stationary_cursor_on_sprite_does_not_block_random_actions_or_trigger_look(self):
+        from head_petting import HeadPetting
+        app = pet()
+        app.head_petting = HeadPetting()
+        position = (app.x + 96, app.y + 104)
+        app.last_cursor = position
+        app.last_cursor_motion = 0
+        app.autonomy.next_action = 0
+        app.autonomy.rng.choice = lambda choices: 'running'
+        app.update_behavior(10, position)
+        self.assertEqual(app.state, 'running')
+        self.assertIsNone(app.look_index)
+        self.assertFalse(app.petting_active)
+        app.update_behavior(11, position)
+        self.assertEqual(app.state, 'running')
+
     def test_timer_jitter_does_not_accumulate_per_frame(self):
         app = pet(selected='running-right')
         app.deadline = 10
@@ -382,9 +519,13 @@ class BehaviorTests(unittest.TestCase):
         position = (app.x + 96 * 2, app.y + 104 * 2 - 200)
         app.update_behavior(10, position)
         self.assertEqual(app.look_index, 0)
+        app.update_behavior(10.2, position)
+        self.assertEqual(app.look_index, 0)
         app.update_behavior(10.5, position)
         self.assertEqual(app.look_index, 0)
         app.update_behavior(11.1, position)
+        self.assertEqual(app.look_index, 0)
+        app.update_behavior(12.1, position)
         self.assertIsNone(app.look_index)
         self.assertEqual(app.state, "idle")
 

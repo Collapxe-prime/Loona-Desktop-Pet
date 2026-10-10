@@ -26,6 +26,13 @@ def prepare_icon(root=ROOT):
         if image.width!=image.height:raise ValueError('Application icon PNG must be square')
         image.convert('RGBA').save(root/'assets/app-icon.ico',format='ICO',
             sizes=[(n,n) for n in (16,24,32,48,64,128,256)])
+    # Designer-supplied close-up for the small notification-area slot.
+    with Image.open(root/'packaging/LoonaDesktopPet-tray.png') as image:
+        if image.width!=image.height:raise ValueError('Tray icon PNG must be square')
+        rgba=image.convert('RGBA')
+        if rgba.getchannel('A').getbbox() is None:raise ValueError('Tray icon is empty')
+        rgba.save(root/'assets/tray-icon.ico',format='ICO',
+            sizes=[(n,n) for n in (16,24,32,48,64)])
 
 def verify_branding(executable,version):
     import ctypes as C
@@ -90,6 +97,7 @@ def release_assets(root=ROOT):
     paths=[Path('assets/Loona.png'),Path('assets/revamp/manifest.json'),
            Path('assets/revamp/quality-profile.json'),Path('assets/petting-smile/animation.json')]
     paths.append(Path('assets/app-icon.ico'))
+    paths.append(Path('assets/tray-icon.ico'))
     manifest=json.loads((root/paths[1]).read_text(encoding='utf-8'))
     for name,entry in manifest['animations'].items():
         if not re.fullmatch(r'[a-z][a-z-]*',name):raise ValueError('Unsafe animation group')

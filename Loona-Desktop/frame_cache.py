@@ -32,9 +32,10 @@ class ByteLRU:
     def __len__(self):return len(self.items)
 
 class LazyFrames(Sequence):
-    def __init__(self,paths,canvas,cache,factors=None,pivot=0):
+    def __init__(self,paths,canvas,cache,factors=None,pivot=0,display_scale=1,display_pivot=(0,0)):
         self.paths=tuple(Path(p) for p in paths);self.canvas=canvas;self.cache=cache
         self.factors=factors;self.pivot=pivot
+        self.display_scale=display_scale;self.display_pivot=tuple(display_pivot)
         # Headers are cheap; leave compressed pixel data on disk until needed.
         for path in self.paths:
             with Image.open(path) as source:
@@ -48,7 +49,7 @@ class LazyFrames(Sequence):
         if index<0:index+=len(self)
         if not 0<=index<len(self):raise IndexError(index)
         factor=self.factors[index] if self.factors else 1
-        key=(self.paths[index],factor,self.pivot)
+        key=(self.paths[index],factor,self.pivot,self.display_scale,self.display_pivot)
         frame=self.cache.get(key)
         if frame is None:
             with Image.open(self.paths[index]) as source:frame=source.copy()
@@ -56,5 +57,8 @@ class LazyFrames(Sequence):
             if abs(factor-1)>1e-9:
                 from frame_registration import horizontal_register
                 frame=horizontal_register(frame,factor,self.pivot)
+            if abs(self.display_scale-1)>1e-9:
+                from frame_registration import uniform_register
+                frame=uniform_register(frame,self.display_scale,self.display_pivot)
             self.cache.put(key,frame)
         return frame

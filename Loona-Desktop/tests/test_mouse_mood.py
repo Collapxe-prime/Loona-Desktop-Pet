@@ -29,7 +29,9 @@ class MouseMoodTests(unittest.TestCase):
         self.assertEqual(app.index, REVAMP_PACK['animations']['waiting'].get('loop_start', 0))
 
     def test_three_cursor_approaches_trigger_waiting_without_clicks(self):
+        from head_petting import HeadPetting
         app = pet()
+        app.head_petting = HeadPetting()
         app.mouse_mood = MouseMood()
         inside = (app.x + 96, app.y + 104)
         outside = (app.x + 200, app.y + 104)

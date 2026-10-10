@@ -8,6 +8,27 @@ DURATIONS = {"running": .82, "review": 1.03}
 
 
 class AutonomyTests(unittest.TestCase):
+    def test_sitting_remaining_time_survives_interruptions_and_recenter(self):
+        actor = self.make()
+        actor.action, actor.until = 'sitting', 100
+        actor.update(10,100,SPEEDS,interrupted=True)
+        self.assertEqual(actor.sitting_remaining,90)
+        actor.update(30,100,SPEEDS,interrupted=True)
+        actor.recenter(40,500,0,1000)
+        self.assertEqual(actor.sitting_remaining,90)
+        self.assertEqual(actor.update(50,500,SPEEDS),("sitting",500))
+        self.assertEqual(actor.until,140)
+        self.assertEqual(actor.update(139,500,SPEEDS)[0],'sitting')
+        self.assertIsNone(actor.update(140,500,SPEEDS)[0])
+        self.assertFalse(actor.sitting_committed)
+
+    def test_disabling_autonomy_cancels_saved_sitting(self):
+        actor = self.make()
+        actor.action, actor.until = 'sitting', 100
+        actor.update(10,100,SPEEDS,interrupted=True)
+        actor.update(20,100,SPEEDS,enabled=False)
+        self.assertFalse(actor.sitting_committed)
+
     def test_occasional_stroll_becomes_directional_run_and_finishes_at_target(self):
         from behavior import STROLL_SPEED
         durations=dict(DURATIONS,**{'walking-left':4.2,'walking-right':4.2,'running-left':3,'running-right':3})
@@ -65,7 +86,7 @@ class AutonomyTests(unittest.TestCase):
         actor.pause(1)
         self.assertFalse(actor.leaving_window)
 
-    def test_sitting_is_random_behavior_only_on_window_and_holds_pose(self):
+    def test_sitting_requires_a_surface_and_holds_pose(self):
         actor = self.make()
         actor.rng.choice = lambda choices: "sitting" if "sitting" in choices else "running"
         actor.start_action(0, 100, SPEEDS, walking=False, on_window=False)
@@ -76,6 +97,24 @@ class AutonomyTests(unittest.TestCase):
         self.assertLessEqual(actor.until, 185)
         self.assertEqual(actor.update(actor.until - .1, 100, SPEEDS, on_window=True), ("sitting", 100))
         self.assertIsNone(actor.update(actor.until, 100, SPEEDS, on_window=True)[0])
+
+    def test_taskbar_sitting_is_about_a_quarter_of_actions_and_keeps_long_hold(self):
+        durations = dict(DURATIONS, jumping=5.04, sitting=2.16)
+        speeds = dict(SPEEDS, jumping=1, sitting=1)
+        actor = Autonomy(0, 100, -1000, 2000, durations, random.Random(42))
+        seated = 0
+        for _ in range(10000):
+            actor.start_action(0, 100, speeds, walking=True, on_taskbar=True)
+            if actor.action == 'sitting':
+                seated += 1
+                self.assertGreaterEqual(actor.until, 60)
+                self.assertLessEqual(actor.until, 180)
+        self.assertTrue(2300 <= seated <= 2700, seated)
+        actor.rng.random = lambda: 0
+        actor.pause(1)
+        actor.update(2, 100, speeds, on_taskbar=True)
+        state, x = actor.update(actor.next_action, 100, speeds, on_taskbar=True)
+        self.assertEqual((state, x), ('sitting', 100))
 
     def make(self):
         return Autonomy(0, 100, -100, 400, DURATIONS, random.Random(42))

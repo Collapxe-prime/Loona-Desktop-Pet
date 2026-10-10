@@ -20,6 +20,7 @@ from mouse_mood import MouseMood
 from revamp_loader import read_pack, load_pack
 from app_metadata import read_version, user_data_directory, APP_TITLE, APP_ID
 from frame_cache import ByteLRU
+from windows_shell import TrayIcon, Autostart, SingleInstance, TRAY_MESSAGE, RESTORE_MESSAGE
 
 BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 DATA_DIR = user_data_directory(BASE, frozen=getattr(sys,'frozen',False))
@@ -28,10 +29,10 @@ STATES = {
     "running-right": (1, [120] * 7 + [220], "Бег вправо"),
     "running-left": (2, [120] * 7 + [220], "Бег влево"),
     "waving": (3, [140] * 3 + [280], "Приветствие"),
-    "jumping": (4, [140] * 4 + [280], "Гримуар"),
+    "jumping": (4, [420] * 4 + [840], "Гримуар"),
     "failed": (5, [140] * 7 + [240], "Неудача"),
     "waiting": (6, [150] * 5 + [260], "Злость"),
-    "running": (7, [120] * 5 + [220], "Работа"),
+    "running": (7, [360] * 5 + [660], "Работа"),
     "review": (8, [150] * 5 + [280], "Проверка"),
 }
 EXTRA_ANIMATIONS = {
@@ -45,10 +46,13 @@ for extra_name, (extra_durations, extra_label) in EXTRA_ANIMATIONS.items():
     if all((folder / f"{i:02}.png").is_file() for i in range(len(extra_durations))):
         STATES[extra_name] = (None, extra_durations, extra_label)
 SPEEDS = [1 / 3, 0.5, 1.0, 1.5, 2.0]
+SPEED_PROFILE = "animation-speeds-v2"
 SCALES = [1.0, 1.5, 2.0]
 REACTION_RADII = [150, 300, 450, 600]
 LANDING_BALANCE_SECONDS = 1.0
 REVAMP_ROOT = BASE / "assets" / "revamp"
+if (REVAMP_ROOT/'sitting-taskbar'/'31.png').is_file():
+    STATES['sitting-taskbar'] = (None, [120]*32, 'Сидение на панели задач')
 for name, label in (("walking-right", "Ходьба вправо"), ("walking-left", "Ходьба влево")):
     # Both eight-frame and older longer walking packs are supported;
     # read_pack validates the exact frame count from the manifest below.
@@ -59,6 +63,26 @@ if REVAMP_PACK:
     for name, entry in REVAMP_PACK["animations"].items():
         row, _, label = STATES[name]
         STATES[name] = (row, entry["durations_ms"], label)
+
+
+def speed_choices(name):
+    # Retain old fast choices after rebase: old 1x/1.5x/2x become 3x/4.5x/6x.
+    return SPEEDS + [3.0, 4.5, 6.0] if name in ("jumping", "running") else SPEEDS
+
+
+def animation_speeds(settings=None):
+    """Rebase legacy grimoire/work settings once without changing their tempo."""
+    speeds = {name: 1.0 for name in STATES}
+    profile = (settings or {}).get("speed_profile")
+    if profile in ("animation-repair-v1", SPEED_PROFILE):
+        for name, value in settings.get("speeds", {}).items():
+            if name not in speeds:
+                continue
+            choices = SPEEDS if profile == "animation-repair-v1" else speed_choices(name)
+            if value in choices:
+                factor = 3 if profile == "animation-repair-v1" and name in ("jumping", "running") else 1
+                speeds[name] = value * factor
+    return speeds
 
 
 def load_frames(path: Path):
@@ -132,7 +156,7 @@ def self_test(sheet):
             for frame in group:
                 (width, height), data = pixel_bytes(frame, scale)
                 assert len(data) == width * height * 4
-    hover_total = 1680 if REVAMP_PACK else 840
+    hover_total = 5040 if REVAMP_PACK else 2520
     assert sum(STATES["jumping"][1]) == hover_total
     assert sum(d / SPEEDS[0] for d in STATES["jumping"][1]) == hover_total * 3
     print(f"PASS: {sum(len(frames[n]) for n in STATES)} animation frames, {len(frames.get('look', []))} look poses, "
@@ -198,6 +222,16 @@ class DesktopPet:
         solid = [b for b in solid if b]
         self.body_bounds = (min(b[0] for b in solid), min(b[1] for b in solid),
                             max(b[2] for b in solid), max(b[3] for b in solid)) if solid else (0, 0, 192, 208)
+        seated = [f.getchannel('A').point(lambda a: 255 if a >= 8 else 0).getbbox()
+                  for f in self.frames.get('sitting', ())]
+        seated = [b for b in seated if b]
+        self.sitting_bounds = (min(b[0] for b in seated), min(b[1] for b in seated),
+                               max(b[2] for b in seated), max(b[3] for b in seated)) if seated else None
+        floor_seated=[f.getchannel('A').point(lambda a:255 if a>=8 else 0).getbbox()
+                      for f in self.frames.get('sitting-taskbar',())]
+        floor_seated=[b for b in floor_seated if b]
+        self.taskbar_sitting_bounds=(min(b[0] for b in floor_seated),min(b[1] for b in floor_seated),
+                                    max(b[2] for b in floor_seated),max(b[3] for b in floor_seated)) if floor_seated else None
         self.smoke = smoke
         self.state = "idle"
         self.selected_state = "idle"
@@ -248,7 +282,7 @@ class DesktopPet:
         from mouse_throw import DragMotion
         self.drag_motion = DragMotion()
         self.menu_open = False
-        self.speeds = {name: 1.0 for name in STATES}
+        self.speeds = animation_speeds()
         self.scale = 1.0
         self.x, self.y = None, None
         self.index = 0
@@ -275,9 +309,7 @@ class DesktopPet:
                     self.reaction_radius = settings["reaction_radius"]
                 if settings.get("scale") in SCALES:
                     self.scale = settings["scale"]
-                for name, value in (settings.get("speeds", {}) if settings.get("speed_profile") == "animation-repair-v1" else {}).items():
-                    if name in STATES and value in SPEEDS:
-                        self.speeds[name] = value
+                self.speeds = animation_speeds(settings)
                 position = settings.get("position")
                 if isinstance(position, list) and len(position) == 2 and all(type(v) is int for v in position):
                     self.x, self.y = position
@@ -310,6 +342,11 @@ class DesktopPet:
         self.application_icon=bind(u,'LoadImageW',W.HANDLE,W.HINSTANCE,W.LPCWSTR,W.UINT,
                                    C.c_int,C.c_int,W.UINT)(None,str(BASE/'assets/app-icon.ico'),1,0,0,0x10|0x40)
         if not self.application_icon:raise C.WinError(C.get_last_error())
+        small_icon_size=bind(u,'GetSystemMetrics',C.c_int,C.c_int)
+        self.tray_icon=bind(u,'LoadImageW',W.HANDLE,W.HINSTANCE,W.LPCWSTR,W.UINT,
+                            C.c_int,C.c_int,W.UINT)(None,str(BASE/'assets/tray-icon.ico'),1,
+                            small_icon_size(49),small_icon_size(50),0x10|0x40)
+        if not self.tray_icon:raise C.WinError(C.get_last_error())
         self.register = bind(u, "RegisterClassW", W.ATOM, C.POINTER(WNDCLASS))
         self.create = bind(u, "CreateWindowExW", W.HWND, W.DWORD, W.LPCWSTR, W.LPCWSTR,
                            W.DWORD, C.c_int, C.c_int, C.c_int, C.c_int,
@@ -343,6 +380,8 @@ class DesktopPet:
                                C.c_int, C.c_int, C.c_int, W.HWND, C.POINTER(W.RECT))
         self.destroy_menu = bind(u, "DestroyMenu", W.BOOL, W.HANDLE)
         self.foreground = bind(u, "SetForegroundWindow", W.BOOL, W.HWND)
+        self.taskbar_created = bind(u, "RegisterWindowMessageW", W.UINT, W.LPCWSTR)("TaskbarCreated")
+        self.autostart = Autostart()
         self.callback = WNDPROC(self.wndproc)
         klass = WNDCLASS(0, self.callback, 0, 0, self.instance, self.application_icon,
                          self.arrow_cursor, None, None, "LoonaDesktopPet")
@@ -378,22 +417,32 @@ class DesktopPet:
         self.render()
         if not smoke:
             self.show(self.hwnd, 4)
+        self.tray = TrayIcon(self.hwnd, self.tray_icon, enabled=not smoke)
+        self.tray.ensure(time.monotonic())
         self.deadline = time.monotonic() + self.duration()
         if smoke:
             self.check_dynamic_rendering()
             self.check_petting_rendering()
             self.check_physics_rendering()
+            bind(u, "SendMessageW", LRESULT, W.HWND, W.UINT, WPARAM, LPARAM)(
+                self.hwnd, RESTORE_MESSAGE, 0, 0)
+            assert self.physics.support is None and self.physics.vx == self.physics.vy == 0
+            assert not self.tray.enabled and not self.tray.added
             self.is_visible = bind(u, "IsWindowVisible", W.BOOL, W.HWND)
             assert not self.is_visible(self.hwnd), "Smoke-test window must stay hidden"
             logging.info("SMOKE PASS: diagnostic window stays hidden")
+            logging.info("SMOKE PASS: native recovery message resets physics without tray icon or settings writes")
         if not self.settimer(self.hwnd, 1, 10, None):
             raise C.WinError(C.get_last_error())
+        if not smoke:
+            self.save()  # Persist the normalized profile; diagnostics never touch user settings.
         logging.info("Started pid=%s hwnd=%s state=%s paints=%s", os.getpid(), self.hwnd, self.state, self.paint_count)
 
     def duration(self):
         if self.state == "balancing" and getattr(self, "landing_balance_cycles", 0) > 0:
             return LANDING_BALANCE_SECONDS / len(self.frames["balancing"])
-        return STATES[self.state][1][self.index] / (1000 * self.speeds[self.state])
+        group = self.sitting_group() if self.state=='sitting' else self.state
+        return STATES[group][1][self.index] / (1000 * self.speeds[self.state])
 
     def walking_bounds(self, allow_exit=False):
         left, top, right, bottom = self.screen_bounds()
@@ -421,6 +470,32 @@ class DesktopPet:
     def collision_bounds(self):
         return tuple(round(v * self.scale) for v in getattr(self, "body_bounds", (0, 0, 192, 208)))
 
+    def render_group(self):
+        look=getattr(self,'look_index',None)
+        state=getattr(self,'state','idle')
+        index=getattr(self,'index',0)
+        if look is not None:
+            return 'look',look
+        if state=='sitting':
+            return self.sitting_group(),index
+        return state,index
+
+    def sitting_group(self):
+        if 'sitting-taskbar' in getattr(self,'frames',{}):
+            support=getattr(getattr(self,'physics',None),'support',None)
+            bounds=getattr(self,'sitting_bounds',None)
+            if support is None or (bounds and self.y+round(bounds[3]*self.scale)>self.screen_bounds()[3]):
+                return 'sitting-taskbar'
+        return 'sitting'
+
+    def render_position(self):
+        """Align the floor pose's contact point to the existing physical support."""
+        group,_=self.render_group()
+        if group=='sitting-taskbar':
+            surface=REVAMP_PACK['animations'][group]['surface_y']
+            return self.x,self.y+self.collision_bounds()[3]-round(surface*self.scale)
+        return self.x,self.y
+
     def screen_bounds(self):
         center = POINT(round(self.x + 96 * self.scale), round(self.y + 104 * self.scale))
         monitor = self.monitor_from_point(center, 2)
@@ -445,7 +520,7 @@ class DesktopPet:
                                           round(192 * self.scale), round(208 * self.scale),
                                           self.screen_bounds(), dragging=dragging,
                                           paused=self.menu_open,
-                                          seated=getattr(self,'state','idle') == 'sitting',
+                                          seated=getattr(self,'state','idle') in ('sitting','sitting-taskbar'),
                                           platforms=self.window_platforms.scan(now)
                                           if self.windows_enabled and not self.smoke else (),
                                           body=self.collision_bounds())
@@ -631,9 +706,12 @@ class DesktopPet:
         if cursor_moved:
             self.last_cursor_motion = now
             self.last_cursor = position
-        px = (position[0] - self.x) / self.scale
-        py = (position[1] - self.y) / self.scale
+        display_x, display_y = self.render_position()
+        px = (position[0] - display_x) / self.scale
+        py = (position[1] - display_y) / self.scale
         nearby = math.hypot(px - 96, py - 104) * self.scale <= self.reaction_radius
+        gaze_hold = 2.0 if self.look_index is not None else .25
+        cursor_reacting = nearby and now - self.last_cursor_motion < gaze_hold
         left, top, right, bottom = self.hover_bounds
         inside = left <= px < right and top <= py < bottom
         mood = getattr(self, "mouse_mood", None)
@@ -641,31 +719,51 @@ class DesktopPet:
         typing_action = keyboard.animation(now, self.typing_waiting) if (
             keyboard is not None and self.typing_enabled) else None
         petter = getattr(self, 'head_petting', None)
-        petting_allowed = (self.dynamic and self.selected_state == 'idle' and self.drag is None
+        sitting_committed = self.autonomy.sitting_committed
+        reaction_blocked = (not self.dynamic or (self.drag is not None and getattr(self, 'drag_moved', False))
+            or self.startup_wave or (self.physics_enabled and (
+                not self.physics.grounded or self.physics.sliding
+                or now < self.physics.balance_until or self.landing_balance_cycles > 0)))
+        # A short stroke must not erase irritation; sustained strokes can calm it.
+        anger_active = bool(mood and mood.active(now, blocked=reaction_blocked))
+        anger_active |= getattr(self, 'petting_anger_once', False)
+        petting_eligible = (self.dynamic and self.selected_state == 'idle' and self.drag is None
             and not self.startup_wave and typing_action is None and len(self.frames['idle']) >= 21
             and (not self.physics_enabled or (self.physics.grounded and not self.physics.sliding
                  and now >= self.physics.balance_until and self.landing_balance_cycles == 0)))
-        if petter:petter.bounds=getattr(self,'petting_bounds',self.hover_bounds)
-        head_candidate = bool(petter and petting_allowed and petter.in_sprite(px,py))
-        if petter and petter.sample(now,px,py,enabled=petting_allowed,moved=cursor_moved):
+        petting_allowed = petting_eligible
+        if petter:
+            seated_group,_=self.render_group()
+            seated_bounds=(getattr(self,'taskbar_sitting_bounds',None) if seated_group=='sitting-taskbar'
+                           else getattr(self,'sitting_bounds',None) if seated_group=='sitting' else None)
+            petter.bounds = (seated_bounds
+                             or getattr(self,'petting_bounds',self.hover_bounds))
+        head_candidate = bool(petter and petting_allowed and not anger_active and not sitting_committed
+                              and cursor_reacting and petter.in_sprite(px,py))
+        stroke = bool(petter and petter.sample(now,px,py,enabled=petting_allowed,moved=cursor_moved))
+        if (stroke and (not sitting_committed or petter.cancels_sitting(now))
+                and (not anger_active or petter.calms_anger(now))):
+            if sitting_committed:
+                self.autonomy.cancel_sitting(now)
+                sitting_committed = False
             self.petting_anger_once=False
             if mood:mood.soothe()
+            anger_active=False
             self.greeting_until=0
             self.cancel_inspection()
-        if not petting_allowed:
+        if not petting_eligible:
             self.petting_anger_once=False
         elif petter and petter.consume_stop_anger():
             self.petting_anger_once=True
-        petting = bool(petter and petter.active(now))
+        petting = bool(petter and petter.active(now) and not anger_active and not sitting_committed)
         if mood:
             mood.approach(now, inside,
                 outside=not (left - 12 <= px < right + 12 and top - 12 <= py < bottom + 12),
-                moved=cursor_moved, enabled=self.dynamic and self.drag is None and not self.startup_wave and not head_candidate and not petting)
-        annoyed = mood.active(now, blocked=(not self.dynamic or (self.drag is not None and self.drag_moved)
-            or self.startup_wave or (self.physics_enabled and (
-                not self.physics.grounded or self.physics.sliding
-                or now < self.physics.balance_until or self.landing_balance_cycles > 0)))) if mood else False
+                moved=cursor_moved, enabled=self.dynamic and self.drag is None and not self.startup_wave
+                    and not sitting_committed and not (petter and petter.active(now)))
+        annoyed = mood.active(now, blocked=reaction_blocked) if mood else False
         annoyed = annoyed or getattr(self,'petting_anger_once',False)
+        annoyed = annoyed and not sitting_committed
         if annoyed:
             self.greeting_until = 0
             self.cancel_inspection()
@@ -675,13 +773,16 @@ class DesktopPet:
         action, new_x = self.autonomy.update(
             now, self.x, self.speeds,
             enabled=self.dynamic and self.autonomous and self.selected_state == "idle",
-            interrupted=(self.startup_wave or self.drag is not None or typing_action or annoyed or petting or head_candidate
+            interrupted=(self.startup_wave or self.drag is not None
                          or self.inspect_pending or self.inspect_started is not None
-                         or nearby or now < self.greeting_until
+                         or (not sitting_committed and (typing_action or annoyed or petting or head_candidate
+                                                       or cursor_reacting or now < self.greeting_until))
                          or (self.physics_enabled and (not self.physics.grounded or self.physics.sliding
                                                       or now < self.physics.balance_until
                                                       or getattr(self, "landing_balance_cycles", 0) > 0))), walking=self.walking,
             on_window=self.physics_enabled and self.physics.support is not None and "sitting" in self.frames,
+            on_taskbar=(self.physics_enabled and self.physics.grounded
+                        and self.physics.support is None and "sitting" in self.frames),
             exit_targets=self.window_exit_targets() if self.physics_enabled else ())
         walk_distance = round(new_x) - self.x
         moved = walk_distance != 0
@@ -702,6 +803,10 @@ class DesktopPet:
                 target = "slipping" if self.physics.sliding else "balancing"
                 if target not in self.frames:
                     target = self.selected_state
+            elif sitting_committed and inspect_look is not None:
+                target = 'idle'
+            elif action == 'sitting':
+                target = 'sitting'
             elif annoyed:
                 target = "waiting"
             elif petting or head_candidate:
@@ -717,9 +822,9 @@ class DesktopPet:
         look = None if petting or head_candidate else inspect_look
         if (look is None and self.dynamic and self.look_enabled and "look" in self.frames
                 and target == "idle" and self.drag is None
-                and nearby and not petting and not head_candidate
+                and cursor_reacting and not petting and not head_candidate
                 and (not self.physics_enabled or self.physics.grounded)
-                and now - self.last_cursor_motion < 1.0):
+                ):
             look = look_direction(px - 96, py - 104, self.look_index)
         changed_state = target != self.state
         was_petting = getattr(self,'petting_active',False)
@@ -757,11 +862,16 @@ class DesktopPet:
                                 and self.autonomous and self.selected_state == 'idle')
         gait_index = None
         if self.gait_driven:
-            from gait_phase import advance_phase
+            from gait_phase import advance_phase, frame_index
             phase = getattr(self, 'gait_phase', 0.0) if getattr(self, 'gait_state', None) == target else 0.0
             self.gait_phase = advance_phase(phase, walk_distance, self.scale, stride)
             self.gait_state = target
-            gait_index = int(self.gait_phase * len(self.frames[target]))
+            # Walking drawings describe evenly spaced poses. Per-frame contact
+            # measurements caused very short poses followed by long freezes.
+            # Keep stride synchronization, but give every walking pose equal time.
+            distances = (None if target.startswith('walking-') else
+                         REVAMP_PACK['animations'][target].get('frame_distances_px'))
+            gait_index = frame_index(self.gait_phase, len(self.frames[target]), distances)
         else:
             self.gait_state = None
         if changed_state or changed_look or changed_wait_source or changed_pet:
@@ -933,7 +1043,7 @@ class DesktopPet:
         logging.info('SMOKE PASS: sprite stroking renders smile and hearts after two continuous seconds, then releases')
 
     def render(self):
-        group, frame_index = ("look", self.look_index) if self.look_index is not None else (self.state, self.index)
+        group, frame_index = self.render_group()
         mirrored = group in ("slipping", "falling") and getattr(self, "motion_facing", 1) < 0
         quality = ("new" if group in EXTRA_ANIMATIONS else "original") if self.uniform_quality and not REVAMP_PACK else None
         if REVAMP_PACK and self.uniform_quality and self.quality_profile:
@@ -969,7 +1079,8 @@ class DesktopPet:
                 raise C.WinError(C.get_last_error())
             previous = self.selectobj(dc, bitmap)
             C.memmove(bits, pixels, len(pixels))
-            ok = self.update(self.hwnd, screen, C.byref(POINT(self.x, self.y)),
+            display_x, display_y = self.render_position()
+            ok = self.update(self.hwnd, screen, C.byref(POINT(display_x, display_y)),
                              C.byref(SIZE(width, height)), dc, C.byref(POINT(0, 0)),
                              0, C.byref(BLENDFUNCTION(0, 0, 255, 1)), 2)
             if not ok:
@@ -1028,7 +1139,7 @@ class DesktopPet:
             DATA_DIR.mkdir(parents=True,exist_ok=True)
             temp = DATA_DIR / "settings.json.tmp"
             temp.write_text(json.dumps({"state": self.selected_state, "speeds": self.speeds,
-                                       "speed_profile": "animation-repair-v1",
+                                       "speed_profile": SPEED_PROFILE,
                                        "dynamic": self.dynamic, "look_enabled": self.look_enabled,
                                        "autonomous": self.autonomous, "walking": self.walking,
                                        "physics_enabled": self.physics_enabled,
@@ -1051,16 +1162,58 @@ class DesktopPet:
         self.render()
         self.save()
 
+    def restore_to_screen(self):
+        """Recover on the cursor's monitor, with no stale drag or window inertia."""
+        now = time.monotonic()
+        pos = POINT()
+        self.cursor(C.byref(pos))
+        info = MONITORINFO()
+        info.cbSize = C.sizeof(info)
+        monitor = self.monitor_from_point(pos, 2)
+        if not self.monitor_info(monitor, C.byref(info)):
+            return
+        work = info.rcWork
+        bl, bt, br, feet = self.collision_bounds()
+        self.x = max(work.left - bl, min(work.right - br, round((work.left + work.right - bl - br) / 2)))
+        self.y = max(work.top - bt, work.bottom - feet)
+        self.drag = self.drag_direction = None
+        self.releasecapture()
+        self.physics = Physics(now, self.y)
+        self.physics.grounded = True
+        self.landing_balance_cycles = 0
+        self.startup_wave = False
+        self.greeting_until = 0
+        self.look_index = None
+        self.mouse_mood.soothe()
+        self.keyboard_activity.sample(now, False, enabled=False)
+        self.head_petting.sample(now, 0, 0, enabled=False)
+        self.petting_active = self.petting_happy = self.petting_anger_once = False
+        self.cancel_inspection()
+        self.recenter_walk()
+        self.state = self.selected_state
+        self.reset_animation()
+        if not self.smoke:
+            self.show(self.hwnd, 4)
+            bind(self.user, "SetWindowPos", W.BOOL, W.HWND, W.HWND,
+                 C.c_int, C.c_int, C.c_int, C.c_int, W.UINT)(
+                     self.hwnd, W.HWND(-1), 0, 0, 0, 0, 0x13)
+
     def menu(self):
         self.cancel_inspection()
         self.menu_open = True
         self.hovered = False
         self.autonomy.pause(time.monotonic())
         root, animations, speed, scale, radius = [self.create_menu() for _ in range(5)]
+        speed_values = speed_choices(self.selected_state)
         try:
+            self.append_menu(root, 0, 410, "Вернуть Loona на экран")
+            startup_label = "Запускать при входе в Windows" if self.autostart.available else "Автозагрузка (доступна в .exe)"
+            self.append_menu(root, (8 if self.autostart.enabled() else 0) | (0 if self.autostart.available else 3),
+                             411, startup_label)
+            self.append_menu(root, 0x800, 0, None)
             for i, (name, (_, _, label)) in enumerate(STATES.items()):
                 self.append_menu(animations, 8 if name == self.selected_state else 0, 100 + i, label)
-            for i, value in enumerate(SPEEDS):
+            for i, value in enumerate(speed_values):
                 label = "×⅓ — в 3 раза медленнее" if i == 0 else f"×{value:g}"
                 self.append_menu(speed, 8 if value == self.speeds[self.selected_state] else 0, 200 + i, label)
             for i, value in enumerate(SCALES):
@@ -1095,8 +1248,8 @@ class DesktopPet:
                 self.selected_state = self.state = list(STATES)[command - 100]
                 self.greeting_until = 0
                 self.reset_animation()
-            elif 200 <= command < 200 + len(SPEEDS):
-                self.speeds[self.selected_state] = SPEEDS[command - 200]
+            elif 200 <= command < 200 + len(speed_values):
+                self.speeds[self.selected_state] = speed_values[command - 200]
                 self.reset_animation()
             elif 300 <= command < 300 + len(SCALES):
                 self.scale = SCALES[command - 300]
@@ -1105,6 +1258,15 @@ class DesktopPet:
                 self.reset_animation()
             elif command == 400:
                 self.destroy(self.hwnd)
+            elif command == 410:
+                self.restore_to_screen()
+            elif command == 411:
+                try:
+                    self.autostart.set_enabled(not self.autostart.enabled())
+                except (OSError, RuntimeError) as error:
+                    logging.exception("Cannot change autostart")
+                    bind(self.user, "MessageBoxW", C.c_int, W.HWND, W.LPCWSTR,
+                         W.LPCWSTR, W.UINT)(self.hwnd, str(error), APP_TITLE, 16)
             elif command == 401:
                 self.dynamic = not self.dynamic
                 self.greeting_until = 0
@@ -1145,6 +1307,8 @@ class DesktopPet:
                 self.save()
         finally:
             self.destroy_menu(root)  # Also frees its child menus.
+            bind(self.user, "PostMessageW", W.BOOL, W.HWND, W.UINT,
+                 WPARAM, LPARAM)(self.hwnd, 0, 0, 0)
             self.menu_open = False
             if not self.closed:
                 self.hover_suppress_until = time.monotonic() + .15
@@ -1153,11 +1317,26 @@ class DesktopPet:
 
     def wndproc(self, hwnd, message, wparam, lparam):
         try:
+            if message == RESTORE_MESSAGE:
+                self.restore_to_screen()
+                return 0
+            if message == TRAY_MESSAGE:
+                if lparam in (0x202, 0x203, 0x400, 0x401):
+                    self.restore_to_screen()
+                elif lparam in (0x205, 0x7B):
+                    self.menu()
+                return 0
+            if message == getattr(self, 'taskbar_created', -1):
+                tray = getattr(self, 'tray', None)
+                if tray:
+                    tray.explorer_restarted()
+                return 0
             if message == 0x20 and (lparam & 0xFFFF) == 1:  # WM_SETCURSOR, HTCLIENT
                 self.set_cursor(self.arrow_cursor)
                 return 1
             if message == 0x113:  # WM_TIMER
                 now = time.monotonic()
+                self.tray.ensure(now)
                 if self.smoke:
                     assert not self.is_visible(hwnd), "Diagnostic animations must never appear on the desktop"
                     elapsed = now - self.started
@@ -1187,6 +1366,10 @@ class DesktopPet:
                     self.mouse_mood.touch(time.monotonic())
                 pos = POINT()
                 self.cursor(C.byref(pos))
+                # Start dragging from the visible origin, including a seated
+                # sprite lifted above the taskbar, rather than its hidden anchor.
+                self.x, self.y = self.render_position()
+                self.physics.y = float(self.y)
                 self.drag = (pos.x - self.x, pos.y - self.y)
                 self.drag_start = (pos.x, pos.y)
                 self.drag_turn_x = pos.x
@@ -1264,6 +1447,9 @@ class DesktopPet:
                 return 0
             if message == 2:  # WM_DESTROY
                 self.closed = True
+                tray = getattr(self, 'tray', None)
+                if tray:
+                    tray.close()
                 self.killtimer(hwnd, 1)
                 self.save()
                 self.user.PostQuitMessage(0)
@@ -1309,9 +1495,16 @@ def main():
     if args.self_test:
         self_test(args.sheet)
         return 0
-    app=DesktopPet(args.sheet, smoke=args.smoke_test or args.memory_test)
-    if args.memory_test:app.memory_stress()
-    return app.run()
+    instance = SingleInstance() if getattr(sys, 'frozen', False) and not (args.smoke_test or args.memory_test) else None
+    try:
+        if instance and not instance.first:
+            return 0
+        app=DesktopPet(args.sheet, smoke=args.smoke_test or args.memory_test)
+        if args.memory_test:app.memory_stress()
+        return app.run()
+    finally:
+        if instance:
+            instance.close()
 
 
 if __name__ == "__main__":

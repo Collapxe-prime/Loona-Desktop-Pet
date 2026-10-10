@@ -7,8 +7,8 @@
       "target": 0.6521650099658012,
       "radii_hq": {
         "idle": 0.3339,
-        "running-right": 0.827,
-        "running-left": 0.827,
+        "running-right": 0.52,
+        "running-left": 0.52,
         "waving": 0.8783,
         "jumping": 0.6549,
         "failed": 0.8038,
@@ -19,14 +19,15 @@
         "falling": 0.8124,
         "slipping": 0.6122,
         "balancing": 0.6879,
-        "walking-right": 0.7581,
-        "walking-left": 0.7581,
-        "look": 0.8514
+        "walking-right": 0.3345,
+        "walking-left": 0.3345,
+        "look": 0.8514,
+        "sitting-taskbar": 0.6284
       },
       "before": {
         "idle": 0.6620964568180723,
-        "running-right": 0.8527041232170898,
-        "running-left": 0.8527041232170898,
+        "running-right": 0.695849541032608,
+        "running-left": 0.6958495410326079,
         "waving": 0.8480644007394665,
         "jumping": 0.7207770382560326,
         "failed": 0.8063447435098701,
@@ -37,14 +38,15 @@
         "falling": 0.81982845836803,
         "slipping": 0.7300556328308887,
         "balancing": 0.7568876453590698,
-        "walking-right": 0.7604421733705162,
-        "walking-left": 0.7604421733705161,
-        "look": 0.8595428489636185
+        "walking-right": 0.674598137374959,
+        "walking-left": 0.674598137374959,
+        "look": 0.8595428489636185,
+        "sitting-taskbar": 0.7247865705120278
       },
       "after": {
         "idle": 0.651858042379001,
-        "running-right": 0.6523445712748098,
-        "running-left": 0.6523445712748098,
+        "running-right": 0.6541829998671527,
+        "running-left": 0.6541829998671524,
         "waving": 0.6523664619359657,
         "jumping": 0.6497725505083647,
         "failed": 0.6523198543357956,
@@ -55,17 +57,18 @@
         "falling": 0.6523636941401534,
         "slipping": 0.6536246708820999,
         "balancing": 0.6523356252225112,
-        "walking-right": 0.6518683304614141,
-        "walking-left": 0.6518683304614141,
-        "look": 0.6518381788346992
+        "walking-right": 0.6620641669335805,
+        "walking-left": 0.6620641669335805,
+        "look": 0.6518381788346992,
+        "sitting-taskbar": 0.652085336291187
       }
     },
     "1.5": {
       "target": 0.46942953395636683,
       "radii_hq": {
         "idle": 0.3461,
-        "running-right": 0.9711,
-        "running-left": 0.9711,
+        "running-right": 0.5884,
+        "running-left": 0.5884,
         "waving": 0.9662,
         "jumping": 0.6879,
         "failed": 0.8868,
@@ -76,14 +79,15 @@
         "falling": 0.9039,
         "slipping": 0.7343,
         "balancing": 0.8014,
-        "walking-right": 0.78,
-        "walking-left": 0.78,
-        "look": 0.9821
+        "walking-right": 0.52,
+        "walking-left": 0.52,
+        "look": 0.9821,
+        "sitting-taskbar": 0.6548
       },
       "before": {
         "idle": 0.47657820706230136,
-        "running-right": 0.8053927361413067,
-        "running-left": 0.8053927361413067,
+        "running-right": 0.5143460654852738,
+        "running-left": 0.5143460654852738,
         "waving": 0.7758210602771868,
         "jumping": 0.5251188432592699,
         "failed": 0.6228095272234683,
@@ -94,14 +98,15 @@
         "falling": 0.6567710540329719,
         "slipping": 0.5618826731091453,
         "balancing": 0.5907274703525262,
-        "walking-right": 0.5634307126754415,
-        "walking-left": 0.5634307126754415,
-        "look": 0.7997411198000087
+        "walking-right": 0.5062212564508892,
+        "walking-left": 0.5062212564508892,
+        "look": 0.7997411198000087,
+        "sitting-taskbar": 0.5323169691902454
       },
       "after": {
         "idle": 0.469776631200275,
-        "running-right": 0.46916302886763667,
-        "running-left": 0.4691630288676367,
+        "running-right": 0.46965795664922605,
+        "running-left": 0.46965795664922605,
         "waving": 0.46932690654311726,
         "jumping": 0.4699544260607546,
         "failed": 0.46938612644305366,
@@ -112,17 +117,18 @@
         "falling": 0.46995227400669426,
         "slipping": 0.46915497874578393,
         "balancing": 0.4700634707517094,
-        "walking-right": 0.46943836657613136,
-        "walking-left": 0.4694383665761314,
-        "look": 0.46942319523254583
+        "walking-right": 0.47307566879467644,
+        "walking-left": 0.47307566879467644,
+        "look": 0.46942319523254583,
+        "sitting-taskbar": 0.46933443523253604
       }
     },
     "2": {
       "target": 0.3604507016828871,
       "radii_hq": {
         "idle": 0.4083,
-        "running-right": 1.0004,
-        "running-left": 1.0004,
+        "running-right": 0.6128,
+        "running-left": 0.6128,
         "waving": 0.9882,
         "jumping": 0.6744,
         "failed": 0.882,
@@ -133,14 +139,15 @@
         "falling": 0.9125,
         "slipping": 0.7501,
         "balancing": 0.8234,
-        "walking-right": 0.7751,
-        "walking-left": 0.7751,
-        "look": 1.0004
+        "walking-right": 0.5786,
+        "walking-left": 0.5786,
+        "look": 1.0004,
+        "sitting-taskbar": 0.6709
       },
       "before": {
         "idle": 0.36593979866282955,
-        "running-right": 0.6825421966740581,
-        "running-left": 0.6825421966740581,
+        "running-right": 0.39476398568941695,
+        "running-left": 0.39476398568941695,
         "waving": 0.7045242735142003,
         "jumping": 0.39942736195275996,
         "failed": 0.4760285073057425,
@@ -151,14 +158,15 @@
         "falling": 0.5122216501908201,
         "slipping": 0.4314141641068001,
         "balancing": 0.45548645001423294,
-        "walking-right": 0.42868518072720346,
-        "walking-left": 0.4286851807272034,
-        "look": 0.6596542710492133
+        "walking-right": 0.39205801071791324,
+        "walking-left": 0.39205801071791324,
+        "look": 0.6596542710492133,
+        "sitting-taskbar": 0.40568371111852597
       },
       "after": {
         "idle": 0.36033735605904227,
-        "running-right": 0.34959881555619743,
-        "running-left": 0.3495988155561974,
+        "running-right": 0.3616068112807431,
+        "running-left": 0.36160681128074323,
         "waving": 0.36037662612265553,
         "jumping": 0.36021710720445943,
         "failed": 0.36025703511968027,
@@ -169,9 +177,10 @@
         "falling": 0.3608737758983718,
         "slipping": 0.3599280156746595,
         "balancing": 0.3601042049759262,
-        "walking-right": 0.3595721586431093,
-        "walking-left": 0.35957215864310943,
-        "look": 0.3531443957937649
+        "walking-right": 0.36098660385682446,
+        "walking-left": 0.36098660385682446,
+        "look": 0.3531443957937649,
+        "sitting-taskbar": 0.3597750350690416
       }
     }
   }

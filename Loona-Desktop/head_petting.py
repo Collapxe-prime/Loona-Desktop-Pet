@@ -1,6 +1,9 @@
 """Recognize gentle strokes anywhere on the sprite without changing dragging."""
 import math
 
+ANGER_CALM_SECONDS = 1.0
+SITTING_CANCEL_SECONDS = 4.0
+
 class HeadPetting:
     def __init__(self,bounds=(20,20,170,202)):
         self.bounds=bounds
@@ -72,6 +75,17 @@ class HeadPetting:
 
     def active(self,now):
         return now<self.until
+
+    def calms_anger(self,now):
+        return self.sustained_stroke(now, ANGER_CALM_SECONDS)
+
+    def cancels_sitting(self,now):
+        return self.sustained_stroke(now, SITTING_CANCEL_SECONDS)
+
+    def sustained_stroke(self,now,seconds):
+        return (self.active(now) and self.session_started is not None
+                and self.last_motion is not None and now-self.last_motion <= .6
+                and now-self.session_started >= seconds)
 
     def happy(self,now):
         return self.active(now) and now<self.happy_until

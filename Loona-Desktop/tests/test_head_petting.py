@@ -46,7 +46,9 @@ class HeadPettingTests(unittest.TestCase):
         self.assertEqual(app.state,'idle')
         self.assertFalse(app.petting_anger_once)
         app.update_behavior(20,position)
-        self.assertEqual(app.state,'idle')
+        # A stationary cursor no longer prevents subsequent autonomous actions.
+        self.assertNotEqual(app.state,'waiting')
+        self.assertFalse(app.petting_active)
 
     def test_smile_starts_after_two_seconds_of_continuous_strokes(self):
         detector=HeadPetting()
@@ -136,21 +138,59 @@ class HeadPettingTests(unittest.TestCase):
         detector.sample(.7,104,68,enabled=False)
         self.assertFalse(detector.active(.7))
 
-    def test_idle_blinks_and_calms_anger_without_following_cursor_or_book(self):
+    def test_anger_blocks_stroking_until_reaction_ends(self):
         app=pet();app.head_petting=HeadPetting();app.mouse_mood=MouseMood()
         app.mouse_mood.touch(0);app.mouse_mood.touch(.1)
         for now,x,y in stroke_points():
             app.hovered=True
             app.update_behavior(now,(app.x+x,app.y+y))
-        self.assertTrue(app.petting_active)
-        self.assertFalse(app.mouse_mood.pending)
-        self.assertEqual(app.state,'idle');self.assertIsNone(app.look_index)
-        app.update_behavior(.8,(app.x+104,app.y+68))
-        self.assertEqual(app.index,18)
-        before=app.index;app.advance_animation(1)
-        self.assertEqual(app.index,before)
-        app.update_behavior(2.5,(1800,50))
         self.assertFalse(app.petting_active)
+        self.assertTrue(app.mouse_mood.pending)
+        self.assertEqual(app.state,'waiting');self.assertIsNone(app.look_index)
+        app.update_behavior(.8,(app.x+104,app.y+68))
+        self.assertEqual(app.state,'waiting')
+        app.advance_animation(app.deadline)
+        self.assertEqual(app.state,'waiting')
+        app.update_behavior(7,(1800,50))
+        self.assertFalse(app.mouse_mood.pending)
+        self.assertFalse(app.petting_active)
+        for now,x,y in stroke_points():
+            app.update_behavior(now+8,(app.x+x,app.y+y))
+        self.assertTrue(app.petting_active)
+        self.assertEqual(app.state,'idle')
+
+    def test_one_second_of_continuous_strokes_calms_both_anger_sources(self):
+        for source in ('mouse', 'stop-petting'):
+            app=pet();app.head_petting=HeadPetting();app.mouse_mood=MouseMood()
+            if source == 'mouse':
+                app.mouse_mood.touch(-.2);app.mouse_mood.touch(-.1)
+            else:
+                app.petting_anger_once=True
+            for i in range(51):
+                phase=i%32
+                x=88+2*(phase if phase<=16 else 32-phase)
+                app.update_behavior(i*.02,(app.x+x,app.y+68))
+                if i < 50:
+                    self.assertEqual(app.state,'waiting')
+                    self.assertFalse(app.petting_active)
+            self.assertEqual(app.state,'idle')
+            self.assertTrue(app.petting_active)
+            self.assertFalse(app.mouse_mood.pending)
+            self.assertFalse(app.petting_anger_once)
+
+    def test_leaving_sprite_resets_calming_progress_and_hover_alone_does_not_calm(self):
+        app=pet();app.head_petting=HeadPetting();app.mouse_mood=MouseMood()
+        app.mouse_mood.touch(-.2);app.mouse_mood.touch(-.1)
+        for offset in (0, 1):
+            for now,x,y in stroke_points():
+                app.update_behavior(now+offset,(app.x+x,app.y+y))
+            self.assertEqual(app.state,'waiting')
+            app.update_behavior(offset+.7,(1800,50))
+        position=(app.x+104,app.y+68)
+        for now in (2, 2.5, 3, 3.5):
+            app.update_behavior(now,position)
+            self.assertEqual(app.state,'waiting')
+            self.assertFalse(app.petting_active)
 
     def test_drag_and_fall_keep_their_priority(self):
         app=pet();app.head_petting=HeadPetting();app.mouse_mood=MouseMood()
